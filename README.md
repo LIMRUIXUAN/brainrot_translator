@@ -1,0 +1,1 @@
+# brainrot_translator
