@@ -1,0 +1,15 @@
+import requests
+from bs4 import BeautifulSoup
+
+url = "https://example.com/slang-list"
+
+headers = {
+"User-Agent": "GenZSlangResearchProject/1.0"
+}
+
+response = requests.get(url, headers=headers)
+soup = BeautifulSoup(response.text, "html.parser")
+
+texts = soup.get_text(separator="\n")
+
+print(texts)

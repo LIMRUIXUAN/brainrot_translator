@@ -1,0 +1,60 @@
+Local dataset analysis
+- Column names: ['brainrot', 'normal']
+- Row count: 175
+- Dataset type: term-definition data
+- Usable FLAN-T5 rows after source-aware cleaning: 169
+- Rejected rows after source-aware cleaning: 13
+- Task counts: Counter({'term_definition': 169})
+- Quality snapshot:
+  empty rows=0
+  exact duplicate rows=0
+  very short inputs=110
+  very short targets=5
+  very long inputs=0
+  very long targets=5
+  corrupted targets=2
+  hallucinated targets=0
+- 20 random local examples with classification:
+  01. [term_definition] brainrot=touch grass | normal=a way of telling someone to "go outside", usually after said person is believed to have been online for too long
+  02. [term_definition] brainrot=slop | normal=low-quality internet content, particularly that which was created by generative artificial intelligence
+  03. [term_definition] brainrot=larp | normal=a term for someone being fake or performative, similar to calling them a "poser
+  04. [term_definition] brainrot=rage-bait | normal=to elicit rage within an individual or group
+  05. [term_definition] brainrot=skill issue | normal=a situation where a person's lack of ability or proficiency is seen as the cause of their failure or difficulty in completing a task, sometimes used ironically
+  06. [term_definition] brainrot=six-seven (6-7) | normal=a nonsense word derived from the song "Doot Doot (6 7)" by Skrilla
+  07. [term_definition] brainrot=bruh/bru | normal="bro" originating from AAVE
+  08. [term_definition] brainrot=Roman Empire | normal=a random event, person, incident, or thing that fascinates or intrigues one to the point that one is frequently thinking about it
+  09. [term_definition] brainrot=queen | normal=a gay slang term for a homosexual male – it was once considered pejorative but has been completely reclaimed, and is often used in combination with other words to describe subcommunities
+  10. [term_definition] brainrot=face card | normal=an attractive face
+  11. [term_definition] brainrot=mogging | normal=to dominate, outclass, or look significantly better than someone else, typically in terms of physical appearance
+  12. [term_definition] brainrot=dih | normal=ironic algospeak for dick
+  13. [term_definition] brainrot=cap | normal=to lie originating from AAVE
+  14. [term_definition] brainrot=cook | normal=to perform or do well
+  15. [term_definition] brainrot=beige flag | normal=a behavior or personality trait that is neither good nor bad
+  16. [term_definition] brainrot=Khia | normal=a nobody or irrelevant person
+  17. [term_definition] brainrot=moot(s) | normal=mutuals or mutual followers
+  18. [term_definition] brainrot=crine | normal=often used in phrases like "Son I'm crine"
+  19. [term_definition] brainrot=ate | normal=to performed well or extremely good at something
+  20. [term_definition] brainrot=tea | normal=secret information or rumors
+
+Sampling notes
+- Sampled 831 Hugging Face rows to reach 1000 total rows without exceeding the 6:1 source ratio.
+- Final Hugging Face sample size: 831 rows.
+
+Hugging Face source analysis
+- hf_parallel::ethan00alphayehah/brainrot-dataset: original_rows=5661, cleaned_rows=5438, rejected_rows=223, duplicates=3, keep_rate=0.961, accepted=True, note=Accepted for final pooling.
+- hf_parallel::projolx/genz_brainrot_dataset: original_rows=3170, cleaned_rows=2492, rejected_rows=678, duplicates=0, keep_rate=0.786, accepted=False, note=Excluded because the cleaned keep rate or usable row count was too low.
+- hf_parallel::shvn22k/brainrot-dataset: original_rows=5661, cleaned_rows=5438, rejected_rows=223, duplicates=3, keep_rate=0.961, accepted=True, note=Accepted for final pooling.
+
+Recommendation
+- Strategy: Use combined dataset
+- Reason: Local dataset has only 169 usable rows after cleaning, which is below the 1,000-row minimum.
+- Reason: Local dataset is mostly term-definition data, so it does not provide enough sentence-level translation coverage.
+- Reason: Cleaned Hugging Face parallel data adds high-quality sentence translation pairs after filtering.
+
+Final dataset outputs
+- Final local rows kept: 169
+- Final Hugging Face rows kept: 831
+- Final dataset row count: 1000
+- Final dataset path: D:\brainrot_translator\data\processed\training_dataset_final_combined.csv
+- Rejected dataset path: D:\brainrot_translator\data\processed\training_dataset_rejected.csv
+- Rejected row count: 9067

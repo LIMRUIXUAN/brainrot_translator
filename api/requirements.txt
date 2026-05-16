@@ -1,0 +1,10 @@
+flask
+flask-cors
+transformers
+huggingface-hub<1.0
+torch
+sentencepiece
+pandas
+datasets
+accelerate
+openpyxl
