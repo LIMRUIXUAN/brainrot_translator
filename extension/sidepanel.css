@@ -1,0 +1,26 @@
+.sidepanel-page {
+  width: auto;
+  min-height: 100vh;
+}
+
+.sidepanel-page .popup-shell {
+  max-width: 100%;
+}
+
+.panel-callout {
+  border-color: rgba(56, 189, 248, 0.22);
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 36%),
+    linear-gradient(160deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96));
+}
+
+.callout-copy {
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.callout-copy + .callout-copy {
+  margin-top: 10px;
+}
