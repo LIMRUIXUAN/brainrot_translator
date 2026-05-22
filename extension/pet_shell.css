@@ -1,0 +1,488 @@
+#brainrot-floating-launcher,
+#brainrot-floating-launcher *,
+#brainrot-pet-bubble,
+#brainrot-pet-bubble * {
+  box-sizing: border-box;
+}
+
+#brainrot-floating-launcher {
+  --pet-scale: 1;
+  position: fixed;
+  right: 18px;
+  top: 50%;
+  z-index: 2147483646;
+  width: min(360px, calc(100vw - 24px));
+  color: #f8fafc;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  transform: scale(var(--pet-scale));
+  transform-origin: right center;
+  transition:
+    transform 180ms ease,
+    opacity 180ms ease,
+    right 180ms ease,
+    top 180ms ease,
+    bottom 180ms ease,
+    left 180ms ease;
+  will-change: transform;
+}
+
+.brainrot-launcher-shell {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 24px;
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.2), transparent 38%),
+    linear-gradient(135deg, rgba(17, 24, 39, 0.98), rgba(30, 41, 59, 0.96));
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(10px);
+  transition: opacity 160ms ease, transform 180ms ease;
+}
+
+.brainrot-launcher-brand {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.brainrot-launcher-orb {
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+  background: url('shocked_black_guy.jpg') center/cover;
+  color: #111827;
+  box-shadow: inset 0 2px 8px rgba(255, 255, 255, 0.22);
+}
+
+.brainrot-launcher-brand.is-dragging {
+  cursor: grabbing;
+}
+
+.brainrot-launcher-copy {
+  min-width: 0;
+}
+
+.brainrot-launcher-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fcd34d;
+}
+
+.brainrot-launcher-title {
+  margin-top: 2px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.brainrot-launcher-status {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.brainrot-launcher-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+.brainrot-launcher-button {
+  border: 0;
+  border-radius: 14px;
+  min-height: 42px;
+  padding: 9px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  transition:
+    transform 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    opacity 120ms ease;
+}
+
+.brainrot-launcher-button:hover {
+  transform: translateY(-1px);
+}
+
+.brainrot-launcher-button:active {
+  transform: translateY(0);
+}
+
+.brainrot-launcher-button--primary {
+  background: #f59e0b;
+  color: #111827;
+}
+
+.brainrot-launcher-button--secondary {
+  background: rgba(148, 163, 184, 0.16);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.brainrot-launcher-button--toggle[aria-pressed="false"] {
+  background: rgba(34, 197, 94, 0.18);
+  color: #dcfce7;
+  border: 1px solid rgba(34, 197, 94, 0.24);
+}
+
+.brainrot-launcher-button--toggle[aria-pressed="true"] {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fee2e2;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+}
+
+.brainrot-launcher-button--icon {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  padding: 0;
+  background: rgba(15, 23, 42, 0.42);
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.brainrot-launcher-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
+.brainrot-launcher-scale-label {
+  min-height: 42px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+  user-select: none;
+}
+
+.brainrot-launcher-edge-toggle,
+.brainrot-launcher-minibar {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.brainrot-launcher-edge-toggle {
+  position: absolute;
+  top: 18px;
+  left: -14px;
+  z-index: 2;
+  width: 28px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: #f59e0b;
+  color: #111827;
+  font-size: 18px;
+  font-weight: 900;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.28);
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.brainrot-launcher-edge-toggle:hover {
+  transform: translateX(-2px);
+  background: #fbbf24;
+}
+
+.brainrot-launcher-minibar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 40px;
+  height: 176px;
+  border-radius: 16px 0 0 16px;
+  display: grid;
+  grid-template-rows: 34px 1fr;
+  place-items: center;
+  gap: 8px;
+  padding: 10px 6px;
+  background:
+    linear-gradient(180deg, rgba(245, 158, 11, 0.98), rgba(20, 184, 166, 0.96));
+  color: #111827;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.34);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(12px);
+  transition: opacity 160ms ease, transform 180ms ease;
+}
+
+.brainrot-launcher-minibar-mark {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.brainrot-launcher-minibar-text {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#brainrot-floating-launcher.is-minimized {
+  transform: scale(var(--pet-scale));
+  transform-origin: right center;
+  width: 48px;
+}
+
+#brainrot-floating-launcher.is-minimized .brainrot-launcher-shell,
+#brainrot-floating-launcher.is-minimized .brainrot-launcher-edge-toggle {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(24px);
+}
+
+#brainrot-floating-launcher.is-minimized .brainrot-launcher-minibar {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+#brainrot-pet-bubble {
+  position: fixed;
+  z-index: 2147483647;
+  width: min(380px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
+  display: none;
+  color: #e5eef7;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+.brainrot-bubble-shell {
+  max-height: inherit;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 36%),
+    linear-gradient(140deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96));
+  box-shadow: 0 22px 48px rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(12px);
+}
+
+.brainrot-bubble-loading {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.brainrot-bubble-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  background: url('shocked_black_guy.jpg') center/cover;
+  color: #111827;
+}
+
+.brainrot-bubble-kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7dd3fc;
+}
+
+.brainrot-bubble-heading {
+  margin-top: 2px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.brainrot-bubble-copy {
+  margin-top: 4px;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.brainrot-bubble-block + .brainrot-bubble-block {
+  margin-top: 12px;
+}
+
+.brainrot-bubble-label {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #93c5fd;
+}
+
+.brainrot-bubble-value {
+  color: #fde68a;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.brainrot-bubble-value--formal {
+  color: #bbf7d0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.brainrot-bubble-meta {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.brainrot-bubble-countdown {
+  margin-top: 12px;
+}
+
+.brainrot-bubble-countdown-label {
+  margin-bottom: 6px;
+  color: #bae6fd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.brainrot-bubble-countdown-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.brainrot-bubble-countdown-line {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: #14b8a6;
+  transform-origin: left center;
+  transition: transform 100ms linear;
+}
+
+.brainrot-bubble-chip {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(148, 163, 184, 0.14);
+  color: #dbeafe;
+}
+
+.brainrot-bubble-chip--warn {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+}
+
+.brainrot-bubble-chip--fallback {
+  background: rgba(56, 189, 248, 0.16);
+  color: #bae6fd;
+}
+
+.brainrot-bubble-actions {
+  position: sticky;
+  bottom: -16px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 10px;
+  padding-bottom: 2px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0), rgba(15, 23, 42, 0.98) 32%);
+}
+
+.brainrot-bubble-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.brainrot-bubble-button--copy {
+  background: #14b8a6;
+  color: #082f49;
+}
+
+.brainrot-bubble-button--close {
+  background: rgba(148, 163, 184, 0.16);
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.brainrot-bubble-error {
+  color: #fecaca;
+}
+
+.brainrot-bubble-preview-layout {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.brainrot-bubble-preview-image {
+  width: 92px;
+  height: 92px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+@media (max-width: 640px) {
+  #brainrot-floating-launcher {
+    right: 12px;
+    bottom: 12px;
+    width: calc(100vw - 24px);
+  }
+
+  .brainrot-launcher-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .brainrot-launcher-button {
+    width: 100%;
+  }
+
+  .brainrot-launcher-edge-toggle {
+    left: -8px;
+  }
+
+  .brainrot-bubble-preview-layout {
+    grid-template-columns: 1fr;
+  }
+}

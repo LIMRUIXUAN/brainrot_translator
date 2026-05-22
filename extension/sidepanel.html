@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Brainrot Translator Panel</title>
+    <link rel="stylesheet" href="popup.css" />
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body class="sidepanel-page">
+    <main class="popup-shell">
+      <section class="hero-card">
+        <div class="hero-mark">🧠</div>
+        <div>
+          <p class="hero-kicker">Persistent Test Panel</p>
+          <h1>Brainrot Translator</h1>
+          <p class="hero-copy">
+            This panel stays open while you click the page. The floating pet replies on the webpage, not inside this panel.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel panel-callout">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">How To Test</p>
+            <h2>Keep This Panel Open</h2>
+          </div>
+        </div>
+        <p class="callout-copy">
+          1. Click the extension icon to open this side panel.
+          2. Go back to the webpage.
+          3. Highlight text, hover a meme image, or use the bottom-right launcher.
+        </p>
+        <p class="callout-copy">
+          The result appears as the in-page floating pet bubble, while this panel remains visible for settings and health.
+        </p>
+        <p class="callout-copy">
+          You can also drag the floating pet dock around the page by grabbing its top pet header, similar to a Grammarly-style widget.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Page Probe</p>
+            <h2>Active Tab Connection</h2>
+          </div>
+        </div>
+        <div class="button-row">
+          <button id="checkPageButton" class="primary-button" type="button">Check Active Page</button>
+          <button id="showTestBubbleButton" class="ghost-button" type="button">Show Test Bubble</button>
+        </div>
+        <div class="health-grid">
+          <article class="health-card" id="pageStatusCard">
+            <p class="health-label">Content Script</p>
+            <strong id="pageStatusValue">Unknown</strong>
+            <small id="pageStatusHint">Run the page check after refreshing the target tab.</small>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Backend</p>
+            <h2>Connection Target</h2>
+          </div>
+          <button id="refreshHealthButton" class="ghost-button" type="button">Check Health</button>
+        </div>
+
+        <label class="field">
+          <span>API Base URL</span>
+          <input
+            id="apiBaseUrl"
+            type="url"
+            inputmode="url"
+            spellcheck="false"
+            placeholder="http://127.0.0.1:8000"
+          />
+        </label>
+
+        <div class="button-row">
+          <button id="saveSettingsButton" class="primary-button" type="button">Save Settings</button>
+          <button id="resetDefaultsButton" class="ghost-button" type="button">Reset Defaults</button>
+        </div>
+
+        <p id="notice" class="notice" aria-live="polite"></p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Frontend</p>
+            <h2>Pet Behaviors</h2>
+          </div>
+        </div>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Highlight text analysis</strong>
+            <small>Trigger the pet when users select text on the page.</small>
+          </span>
+          <input id="enableTextSelection" type="checkbox" />
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Ask before translating highlights</strong>
+            <small>Show a confirm prompt after text selection instead of calling the translator immediately.</small>
+          </span>
+          <input id="confirmTextSelection" type="checkbox" />
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Hover image or GIF analysis</strong>
+            <small>Run the 600ms meme hover flow for likely brainrot media.</small>
+          </span>
+          <input id="enableHoverDetection" type="checkbox" />
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Floating launcher</strong>
+            <small>Show the in-page upload and capture control dock.</small>
+          </span>
+          <input id="enableLauncher" type="checkbox" />
+        </label>
+
+        <label class="toggle-row">
+          <span>
+            <strong>Clipboard image paste</strong>
+            <small>Allow pasted screenshots to route into the media analysis path.</small>
+          </span>
+          <input id="enableClipboardPaste" type="checkbox" />
+        </label>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Backend Status</p>
+            <h2>Live Health Snapshot</h2>
+          </div>
+        </div>
+
+        <div class="health-grid">
+          <article class="health-card" id="backendStatusCard">
+            <p class="health-label">Backend</p>
+            <strong id="backendStatusValue">Unknown</strong>
+            <small id="backendStatusHint">No health check yet.</small>
+          </article>
+          <article class="health-card" id="modelStatusCard">
+            <p class="health-label">Text Model</p>
+            <strong id="modelStatusValue">Unknown</strong>
+            <small id="modelStatusHint">No health check yet.</small>
+          </article>
+          <article class="health-card" id="databaseStatusCard">
+            <p class="health-label">Database</p>
+            <strong id="databaseStatusValue">Unknown</strong>
+            <small id="databaseStatusHint">No health check yet.</small>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Dashboard</p>
+            <h2>Brainrot Frequency</h2>
+          </div>
+          <button id="refreshFrequencyButton" class="ghost-button" type="button">Refresh</button>
+        </div>
+        <div id="frequencyStatus" class="frequency-status" aria-live="polite">No dashboard check yet.</div>
+        <ol id="frequencyList" class="frequency-list"></ol>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

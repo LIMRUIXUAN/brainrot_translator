@@ -1,0 +1,240 @@
+:root {
+  color-scheme: dark;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(245, 158, 11, 0.14), transparent 36%),
+    linear-gradient(180deg, #0f172a, #111827 44%, #172033);
+  color: #e2e8f0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  width: 380px;
+  min-height: 560px;
+  background: transparent;
+}
+
+.popup-shell {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.hero-card,
+.panel {
+  border-radius: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    linear-gradient(160deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96));
+  box-shadow: 0 18px 42px rgba(2, 6, 23, 0.28);
+}
+
+.hero-card {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  padding: 18px;
+}
+
+.hero-mark {
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  font-size: 28px;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.26), transparent 28%),
+    linear-gradient(160deg, #f59e0b, #f97316);
+  color: #111827;
+}
+
+.hero-kicker,
+.panel-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fcd34d;
+}
+
+.hero-card h1,
+.panel h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+  color: #f8fafc;
+}
+
+.hero-copy {
+  margin: 8px 0 0;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.field span {
+  font-size: 12px;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.field input {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #f8fafc;
+  font: inherit;
+}
+
+.field input:focus {
+  outline: 2px solid rgba(56, 189, 248, 0.4);
+  outline-offset: 1px;
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.primary-button,
+.ghost-button {
+  border-radius: 999px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.primary-button {
+  border: 0;
+  background: #f59e0b;
+  color: #111827;
+}
+
+.ghost-button {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(148, 163, 184, 0.12);
+  color: #e2e8f0;
+}
+
+.notice {
+  min-height: 18px;
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.notice.is-success {
+  color: #86efac;
+}
+
+.notice.is-error {
+  color: #fca5a5;
+}
+
+.toggle-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+}
+
+.toggle-row + .toggle-row {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.toggle-row strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 14px;
+}
+
+.toggle-row small {
+  display: block;
+  margin-top: 4px;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #14b8a6;
+}
+
+.health-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.health-card {
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  padding: 14px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.health-card.is-ok {
+  border-color: rgba(20, 184, 166, 0.3);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.health-card.is-warn {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.health-card.is-error {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.health-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #93c5fd;
+}
+
+.health-card strong {
+  display: block;
+  color: #f8fafc;
+  font-size: 16px;
+}
+
+.health-card small {
+  display: block;
+  margin-top: 6px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}

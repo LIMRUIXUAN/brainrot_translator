@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Brainrot Translator",
+  "version": "1.0.0",
+  "description": "Detects brainrot text and image/GIF meme semantics on the web.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "action": {
+    "default_title": "Brainrot Translator"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:8000/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "css": [
+        "pet_shell.css"
+      ],
+      "js": [
+        "pet_bubble.js",
+        "content_script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
