@@ -267,12 +267,16 @@
   position: fixed;
   z-index: 2147483647;
   width: min(380px, calc(100vw - 24px));
+  max-height: calc(100vh - 32px);
   display: none;
   color: #e5eef7;
   font-family: "Trebuchet MS", "Segoe UI", sans-serif;
 }
 
 .brainrot-bubble-shell {
+  max-height: inherit;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 16px;
   border-radius: 22px;
   border: 1px solid rgba(56, 189, 248, 0.18);
@@ -321,6 +325,7 @@
   color: #cbd5e1;
   font-size: 13px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .brainrot-bubble-block + .brainrot-bubble-block {
@@ -341,6 +346,7 @@
   font-size: 15px;
   font-weight: 700;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .brainrot-bubble-value--formal {
@@ -354,6 +360,33 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.brainrot-bubble-countdown {
+  margin-top: 12px;
+}
+
+.brainrot-bubble-countdown-label {
+  margin-bottom: 6px;
+  color: #bae6fd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.brainrot-bubble-countdown-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.brainrot-bubble-countdown-line {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: #14b8a6;
+  transform-origin: left center;
+  transition: transform 100ms linear;
 }
 
 .brainrot-bubble-chip {
@@ -376,10 +409,16 @@
 }
 
 .brainrot-bubble-actions {
+  position: sticky;
+  bottom: -16px;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 14px;
+  padding-top: 10px;
+  padding-bottom: 2px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0), rgba(15, 23, 42, 0.98) 32%);
 }
 
 .brainrot-bubble-button {

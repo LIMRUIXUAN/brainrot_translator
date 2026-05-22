@@ -178,3 +178,17 @@ class ImageAnalysisResponse(BaseModel):
             model_used=model_used,
             used_frame_fallback=used_frame_fallback,
         )
+
+
+class WordFrequencyItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    term: str
+    count: int
+    last_seen_at: Optional[str] = None
+
+
+class DashboardWordFrequencyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[WordFrequencyItem]

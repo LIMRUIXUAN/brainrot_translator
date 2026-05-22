@@ -5,7 +5,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
+from api import database
 from api.main import app
 from api.schemas import HighlightedTextAnalysisResponse, ImageAnalysisResponse
 
@@ -25,6 +28,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("local_quality_classifier_available", payload)
         self.assertIn("local_quality_classifier_loaded", payload)
         self.assertIn("database_configured", payload)
+        self.assertIn("text_recheck_configured", payload)
 
     def test_translate_requires_text_field(self) -> None:
         response = self.client.post("/translate", json={})
@@ -132,6 +136,80 @@ class ApiTests(unittest.TestCase):
         self.assertIn("strong charisma", payload["equivalent_text"])
         self.assertEqual(payload["confidence_score"], 0.78)
         agent_mock.assert_not_called()
+
+    def test_low_confidence_local_text_calls_openrouter_recheck(self) -> None:
+        local_result = HighlightedTextAnalysisResponse(
+            is_brainrot=True,
+            brainrot_text="he has rizz",
+            equivalent_text="He has rizz.",
+            formal_explanation="Local model left slang in place.",
+            sentiment_label="unclear",
+            sentiment_rationale="Local model does not score sentiment.",
+            confidence_score=0.45,
+            flagged_for_review=True,
+            model_used="local_transformer",
+        )
+        openrouter_result = HighlightedTextAnalysisResponse(
+            is_brainrot=True,
+            brainrot_text="he has rizz",
+            equivalent_text="He has strong charisma.",
+            formal_explanation="Rizz means charisma or romantic appeal.",
+            sentiment_label="positive",
+            sentiment_rationale="It praises social charm.",
+            confidence_score=0.88,
+            flagged_for_review=False,
+            model_used="deepseek/deepseek-v4-flash",
+        )
+        agent_mock = AsyncMock(return_value=openrouter_result)
+
+        with patch("api.main._try_slang_json_lookup", return_value=None), \
+             patch("api.main._try_local_model_text_analysis", return_value=local_result), \
+             patch("api.main.save_cached_text", return_value=True), \
+             patch("api.main.agent.analyze_highlighted_text", agent_mock):
+                response = self.client.post(
+                    "/api/v1/analyze-highlighted-text",
+                    json={"selected_text": "he has rizz"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["model_used"], "deepseek/deepseek-v4-flash")
+        self.assertEqual(payload["equivalent_text"], "He has strong charisma.")
+        agent_mock.assert_awaited_once()
+
+    def test_manual_recheck_endpoint_bypasses_local_and_cache(self) -> None:
+        openrouter_result = HighlightedTextAnalysisResponse(
+            is_brainrot=True,
+            brainrot_text="skill issue",
+            equivalent_text="This is a problem caused by lack of ability.",
+            formal_explanation="The phrase mocks competence.",
+            sentiment_label="negative",
+            sentiment_rationale="It blames the target.",
+            confidence_score=0.91,
+            flagged_for_review=False,
+            model_used="deepseek/deepseek-v4-flash",
+        )
+        agent_mock = AsyncMock(return_value=openrouter_result)
+
+        with patch("api.main._try_slang_json_lookup") as slang_mock, \
+             patch("api.main._try_local_model_text_analysis") as local_mock, \
+             patch("api.main._try_db_text_lookup") as db_mock, \
+             patch("api.main.save_cached_text", return_value=True), \
+             patch("api.main.agent.analyze_highlighted_text", agent_mock):
+                response = self.client.post(
+                    "/api/v1/recheck-highlighted-text",
+                    json={
+                        "selected_text": "skill issue",
+                        "page_url": "https://example.com",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["model_used"], "deepseek/deepseek-v4-flash")
+        agent_mock.assert_awaited_once()
+        slang_mock.assert_not_called()
+        local_mock.assert_not_called()
+        db_mock.assert_not_called()
 
     def test_highlighted_text_route_uses_quality_classifier_confidence_when_available(self) -> None:
         import torch
@@ -316,6 +394,34 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(response.json()["flagged_for_review"])
         flag_mock.assert_called_once()
 
+    def test_image_route_does_not_update_text_frequency(self) -> None:
+        mocked_result = ImageAnalysisResponse(
+            is_brainrot=True,
+            brainrot_meaning="skill issue",
+            equivalent_text="This is the recipient's fault.",
+            formal_explanation="The meme frames the problem as incompetence.",
+            confidence_score=0.91,
+            flagged_for_review=False,
+            model_used="google/gemini-3-flash-preview",
+            used_frame_fallback=False,
+        )
+
+        with patch("api.main._try_db_image_lookup", return_value=None), \
+             patch("api.main.save_cached_image", return_value=True), \
+             patch("api.main.agent.analyze_screenshot_media", AsyncMock(return_value=mocked_result)), \
+             patch("api.main.increment_word_frequencies") as frequency_mock:
+                response = self.client.post(
+                    "/api/v1/analyze-screenshot-media",
+                    json={
+                        "image_base64": base64.b64encode(b"fake-image").decode("ascii"),
+                        "media_type": "image/png",
+                        "source_url": "https://example.com/skill-issue.png",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        frequency_mock.assert_not_called()
+
     def test_analyze_image_alias_uses_same_response_shape(self) -> None:
         mocked_result = ImageAnalysisResponse(
             is_brainrot=True,
@@ -342,3 +448,69 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["used_frame_fallback"])
+
+    def test_dashboard_word_frequency_endpoint_returns_items(self) -> None:
+        with patch(
+            "api.main.list_word_frequencies",
+            return_value=[
+                {"term": "rizz", "count": 3, "last_seen_at": "2026-05-22T00:00:00+00:00"},
+                {"term": "skill issue", "count": 2, "last_seen_at": None},
+            ],
+        ) as list_mock:
+            response = self.client.get("/api/v1/dashboard/word-frequency?limit=200")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"][0]["term"], "rizz")
+        list_mock.assert_called_once_with(100)
+
+    def test_text_cache_save_upserts_existing_lookup_key(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        database.Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+
+        first = {
+            "is_brainrot": True,
+            "brainrot_text": "skill issue",
+            "equivalent_text": "You lack ability.",
+            "formal_explanation": "Initial local result.",
+            "sentiment_label": "negative",
+            "sentiment_rationale": "Dismissive.",
+            "confidence_score": 0.42,
+            "model_used": "local_transformer",
+        }
+        second = {
+            **first,
+            "equivalent_text": "The problem is being blamed on lack of ability.",
+            "confidence_score": 0.92,
+            "model_used": "deepseek/deepseek-v4-flash",
+        }
+
+        with patch("api.database.get_session_factory", return_value=session_factory):
+            self.assertTrue(database.save_cached_text("skill issue", first))
+            self.assertTrue(database.save_cached_text("skill issue", second))
+            cached = database.lookup_cached_text("skill issue")
+
+        self.assertIsNotNone(cached)
+        self.assertEqual(cached["equivalent_text"], second["equivalent_text"])
+        self.assertEqual(cached["confidence_score"], 0.92)
+        self.assertEqual(cached["model_used"], "deepseek/deepseek-v4-flash")
+
+    def test_word_frequency_helpers_increment_and_sort(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        database.Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+
+        with patch("api.database.get_session_factory", return_value=session_factory):
+            self.assertTrue(database.increment_word_frequencies({"rizz": "rizz"}))
+            self.assertTrue(
+                database.increment_word_frequencies(
+                    {"rizz": "rizz", "skill issue": "skill issue"},
+                    page_url="https://example.com",
+                )
+            )
+            items = database.list_word_frequencies(limit=10)
+
+        self.assertEqual(items[0]["term"], "rizz")
+        self.assertEqual(items[0]["count"], 2)
+        self.assertEqual(items[1]["term"], "skill issue")
+        self.assertEqual(items[1]["count"], 1)

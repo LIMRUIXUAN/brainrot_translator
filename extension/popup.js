@@ -113,7 +113,7 @@
     hintNode.textContent = hint;
   }
 
-function renderHealthSuccess(baseUrl, payload) {
+  function renderHealthSuccess(baseUrl, payload) {
     const localModelLoaded = Boolean(payload.local_text_model_loaded);
     const localModelAvailable = Boolean(payload.local_text_model_available);
     const qualityClassifierLoaded = Boolean(payload.local_quality_classifier_loaded);
@@ -171,6 +171,78 @@ function renderHealthSuccess(baseUrl, payload) {
     );
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function setFrequencyStatus(message, tone) {
+    if (!elements.frequencyStatus) {
+      return;
+    }
+    elements.frequencyStatus.textContent = message;
+    elements.frequencyStatus.className = "frequency-status";
+    if (tone) {
+      elements.frequencyStatus.classList.add(`is-${tone}`);
+    }
+  }
+
+  function renderFrequencyItems(items) {
+    if (!elements.frequencyList) {
+      return;
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      elements.frequencyList.innerHTML = "";
+      setFrequencyStatus("No highlighted text terms have been recorded yet.", null);
+      return;
+    }
+    elements.frequencyList.innerHTML = items
+      .map((item) => {
+        const term = escapeHtml(item.term || "Unknown");
+        const count = Number.isFinite(Number(item.count)) ? Number(item.count) : 0;
+        return `
+          <li class="frequency-item">
+            <span class="frequency-term">${term}</span>
+            <span class="frequency-count">${count}</span>
+          </li>
+        `;
+      })
+      .join("");
+    setFrequencyStatus(`Showing top ${items.length} recorded terms.`, null);
+  }
+
+  function renderFrequencyError(message) {
+    if (elements.frequencyList) {
+      elements.frequencyList.innerHTML = "";
+    }
+    setFrequencyStatus(message, "error");
+  }
+
+  async function refreshFrequency(baseUrl) {
+    if (!elements.frequencyList || !elements.frequencyStatus) {
+      return;
+    }
+    setFrequencyStatus("Loading frequency dashboard...", null);
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/dashboard/word-frequency?limit=20`, {
+        method: "GET"
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.detail || payload.error || "Dashboard request failed.");
+      }
+      renderFrequencyItems(payload.items || []);
+    } catch (error) {
+      renderFrequencyError(
+        error instanceof Error ? error.message : "Unable to load the frequency dashboard."
+      );
+    }
+  }
+
   function renderHealthError(baseUrl, message) {
     setHealthCard(
       elements.backendStatusCard,
@@ -197,6 +269,7 @@ function renderHealthSuccess(baseUrl, payload) {
       "warn"
     );
     setNotice(message, "error");
+    renderFrequencyError("Dashboard unavailable while the backend is offline.");
   }
 
   async function getActiveTab() {
@@ -305,7 +378,7 @@ function renderHealthSuccess(baseUrl, payload) {
       }
       renderPageStatus(
         "Connected",
-        `${response.href} | modes: ${modeSummary.join(", ") || "none"} | launcher ${response.launcherVisible ? "visible" : "hidden"}${injected ? " | auto-injected" : ""}`,
+        `Modes: ${modeSummary.join(", ") || "none"} | launcher ${response.launcherVisible ? "visible" : "hidden"}${injected ? " | auto-injected" : ""}`,
         "ok"
       );
       setNotice(
@@ -369,6 +442,7 @@ function renderHealthSuccess(baseUrl, payload) {
         throw new Error(payload.detail || payload.error || "Backend health check failed.");
       }
       renderHealthSuccess(baseUrl, payload);
+      await refreshFrequency(baseUrl);
       setNotice("Backend health check succeeded.", "success");
     } catch (error) {
       renderHealthError(
@@ -402,6 +476,19 @@ function renderHealthSuccess(baseUrl, payload) {
     await refreshHealth(DEFAULT_SETTINGS.brainrotApiBaseUrl);
   }
 
+  async function saveBehaviorSettingsImmediately() {
+    const currentSettings = await getStoredSettings();
+    const nextSettings = normalizeSettings({
+      ...currentSettings,
+      brainrotEnableTextSelection: elements.enableTextSelection.checked,
+      brainrotConfirmTextSelection: elements.confirmTextSelection.checked,
+      brainrotEnableHoverDetection: elements.enableHoverDetection.checked,
+      brainrotEnableLauncher: elements.enableLauncher.checked,
+      brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked
+    });
+    await setStoredSettings(nextSettings);
+  }
+
   async function initialize() {
     elements.apiBaseUrl = document.getElementById("apiBaseUrl");
     elements.enableTextSelection = document.getElementById("enableTextSelection");
@@ -427,6 +514,9 @@ function renderHealthSuccess(baseUrl, payload) {
     elements.pageStatusHint = document.getElementById("pageStatusHint");
     elements.checkPageButton = document.getElementById("checkPageButton");
     elements.showTestBubbleButton = document.getElementById("showTestBubbleButton");
+    elements.refreshFrequencyButton = document.getElementById("refreshFrequencyButton");
+    elements.frequencyStatus = document.getElementById("frequencyStatus");
+    elements.frequencyList = document.getElementById("frequencyList");
 
     const currentSettings = await getStoredSettings();
     renderSettings(currentSettings);
@@ -453,6 +543,14 @@ function renderHealthSuccess(baseUrl, payload) {
       }
       refreshHealth(baseUrl).catch(() => undefined);
     });
+    elements.refreshFrequencyButton?.addEventListener("click", () => {
+      const baseUrl = readFormSettings().brainrotApiBaseUrl;
+      if (!isValidApiBaseUrl(baseUrl)) {
+        setNotice("Enter a valid API Base URL before refreshing the dashboard.", "error");
+        return;
+      }
+      refreshFrequency(baseUrl).catch(() => undefined);
+    });
     elements.checkPageButton?.addEventListener("click", () => {
       checkActivePage().catch((error) => {
         setNotice(error instanceof Error ? error.message : "Failed to probe the active page.", "error");
@@ -462,6 +560,51 @@ function renderHealthSuccess(baseUrl, payload) {
       showTestBubbleOnPage().catch((error) => {
         setNotice(error instanceof Error ? error.message : "Failed to show the test bubble.", "error");
       });
+    });
+
+    [
+      elements.enableTextSelection,
+      elements.confirmTextSelection,
+      elements.enableHoverDetection,
+      elements.enableLauncher,
+      elements.enableClipboardPaste
+    ].forEach((checkbox) => {
+      checkbox?.addEventListener("change", () => {
+        saveBehaviorSettingsImmediately().catch((error) => {
+          setNotice(
+            error instanceof Error ? error.message : "Failed to update behavior setting.",
+            "error"
+          );
+        });
+      });
+    });
+
+    chrome.storage.onChanged?.addListener((changes, areaName) => {
+      if (areaName !== "local") {
+        return;
+      }
+
+      const updated = {};
+      let hasSettingsChange = false;
+      for (const key of Object.keys(DEFAULT_SETTINGS)) {
+        if (Object.prototype.hasOwnProperty.call(changes, key)) {
+          updated[key] = changes[key].newValue;
+          hasSettingsChange = true;
+        }
+      }
+
+      if (!hasSettingsChange) {
+        return;
+      }
+
+      getStoredSettings()
+        .then((storedSettings) => {
+          renderSettings({
+            ...storedSettings,
+            ...updated
+          });
+        })
+        .catch(() => undefined);
     });
   }
 

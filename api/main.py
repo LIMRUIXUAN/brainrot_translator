@@ -18,6 +18,8 @@ from .database import (
     check_database_connection,
     flag_image_for_review,
     flag_text_for_review,
+    increment_word_frequencies,
+    list_word_frequencies,
     load_slang_terms_index,
     lookup_cached_image,
     lookup_cached_text,
@@ -26,6 +28,7 @@ from .database import (
 )
 from .local_translator import MockLocalTranslator
 from .schemas import (
+    DashboardWordFrequencyResponse,
     HighlightedTextAnalysisRequest,
     HighlightedTextAnalysisResponse,
     ImageAnalysisRequest,
@@ -302,6 +305,40 @@ def _looks_like_brainrot_text(text: str) -> bool:
     return False
 
 
+def _normalise_frequency_term(term: str) -> str:
+    return re.sub(r"\s+", " ", term.strip().casefold())
+
+
+def _extract_brainrot_frequency_terms(text: str) -> dict[str, str]:
+    """Find dashboard terms using built-in markers plus exact slang_terms.json entries."""
+    lowered = text.casefold()
+    candidates: dict[str, str] = {}
+    for marker in SLANG_TEXT_MARKERS:
+        normalized = _normalise_frequency_term(marker)
+        candidates[normalized] = marker
+
+    for normalized, entry in load_slang_terms_index().items():
+        label = str(entry.get("term", "")).strip()
+        if label:
+            candidates[_normalise_frequency_term(normalized)] = label
+
+    matches: dict[str, str] = {}
+    for normalized, label in candidates.items():
+        if not normalized:
+            continue
+        pattern = rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])"
+        if re.search(pattern, lowered):
+            matches[normalized] = label
+    return matches
+
+
+def _record_text_frequency(selected_text: str, page_url: str | None) -> None:
+    increment_word_frequencies(
+        _extract_brainrot_frequency_terms(selected_text),
+        page_url=page_url,
+    )
+
+
 def _safe_non_brainrot_text_analysis(selected_text: str) -> HighlightedTextAnalysisResponse:
     cleaned = selected_text.strip()
     return HighlightedTextAnalysisResponse(
@@ -417,6 +454,39 @@ def _try_db_text_lookup(lookup_key: str) -> HighlightedTextAnalysisResponse | No
     return HighlightedTextAnalysisResponse.model_validate(cached)
 
 
+def _is_low_confidence_result(result: HighlightedTextAnalysisResponse) -> bool:
+    return result.confidence_score < settings.low_confidence_threshold
+
+
+def _stage_low_confidence_text(
+    request: HighlightedTextAnalysisRequest,
+    result: HighlightedTextAnalysisResponse,
+) -> HighlightedTextAnalysisResponse:
+    flagged = result.flagged_for_review or _is_low_confidence_result(result)
+    if flagged:
+        flag_text_for_review(
+            source_text=request.selected_text,
+            page_url=request.page_url,
+            agent_equivalent_text=result.equivalent_text,
+            confidence=result.confidence_score,
+        )
+    return result.model_copy(update={"flagged_for_review": flagged})
+
+
+async def _run_openrouter_text_analysis(
+    request: HighlightedTextAnalysisRequest,
+    lookup_key: str,
+) -> HighlightedTextAnalysisResponse:
+    result = await agent.analyze_highlighted_text(
+        selected_text=request.selected_text,
+        page_url=request.page_url,
+        surrounding_text=request.surrounding_text,
+    )
+    final = _stage_low_confidence_text(request, result)
+    save_cached_text(lookup_key, final.model_dump())
+    return final
+
+
 def _try_db_image_lookup(image_hash: str) -> ImageAnalysisResponse | None:
     """
     Check the PostgreSQL cached_image_analyses table for an exact hash match.
@@ -458,6 +528,7 @@ def create_app() -> FastAPI:
             "local_quality_classifier_available": local_quality_classifier_available,
             "local_quality_classifier_loaded": local_quality_classifier_loaded,
             "openrouter_configured": bool(settings.openrouter_api_key),
+            "text_recheck_configured": bool(settings.openrouter_api_key),
             "api_base_url": settings.extension_api_base_url,
         }
 
@@ -507,6 +578,7 @@ def create_app() -> FastAPI:
         request: HighlightedTextAnalysisRequest,
     ) -> HighlightedTextAnalysisResponse:
         lookup_key = _normalise_text_key(request.selected_text)
+        _record_text_frequency(request.selected_text, request.page_url)
 
         # ── Step 1: Check local slang_terms.json ──────────────────────
         json_hit = _try_slang_json_lookup(lookup_key)
@@ -518,45 +590,52 @@ def create_app() -> FastAPI:
         local_hit = _try_local_model_text_analysis(request.selected_text)
         if local_hit is not None:
             logger.info("TEXT LOCAL MODEL HIT for '%s'", lookup_key)
-            if local_hit.flagged_for_review:
-                flag_text_for_review(
-                    source_text=request.selected_text,
-                    page_url=request.page_url,
-                    agent_equivalent_text=local_hit.equivalent_text,
-                    confidence=local_hit.confidence_score,
+            if _is_low_confidence_result(local_hit):
+                logger.info(
+                    "TEXT LOCAL MODEL LOW CONFIDENCE for '%s' → calling OpenRouter",
+                    lookup_key,
                 )
-            save_cached_text(lookup_key, local_hit.model_dump())
-            return local_hit
+                return await _run_openrouter_text_analysis(request, lookup_key)
+
+            final = _stage_low_confidence_text(request, local_hit)
+            save_cached_text(lookup_key, final.model_dump())
+            return final
 
         # ── Step 3: Check PostgreSQL cache table if no local model exists
         db_hit = _try_db_text_lookup(lookup_key)
         if db_hit is not None:
             logger.info("TEXT CACHE HIT (database) for '%s'", lookup_key)
+            if _is_low_confidence_result(db_hit):
+                logger.info(
+                    "TEXT CACHE HIT LOW CONFIDENCE for '%s' → refreshing with OpenRouter",
+                    lookup_key,
+                )
+                return await _run_openrouter_text_analysis(request, lookup_key)
             return db_hit
 
         # ── Step 4: Cache miss → call DeepSeek via OpenRouter ─────────
         logger.info("TEXT CACHE MISS for '%s' → calling OpenRouter", lookup_key)
-        result = await agent.analyze_highlighted_text(
-            selected_text=request.selected_text,
-            page_url=request.page_url,
-            surrounding_text=request.surrounding_text,
-        )
+        return await _run_openrouter_text_analysis(request, lookup_key)
 
-        flagged = result.flagged_for_review or result.confidence_score < settings.low_confidence_threshold
-        if flagged:
-            flag_text_for_review(
-                source_text=request.selected_text,
-                page_url=request.page_url,
-                agent_equivalent_text=result.equivalent_text,
-                confidence=result.confidence_score,
-            )
+    @app.post(
+        "/api/v1/recheck-highlighted-text",
+        response_model=HighlightedTextAnalysisResponse,
+    )
+    async def recheck_highlighted_text(
+        request: HighlightedTextAnalysisRequest,
+    ) -> HighlightedTextAnalysisResponse:
+        lookup_key = _normalise_text_key(request.selected_text)
+        _record_text_frequency(request.selected_text, request.page_url)
+        logger.info("TEXT MANUAL RECHECK for '%s' → calling OpenRouter", lookup_key)
+        return await _run_openrouter_text_analysis(request, lookup_key)
 
-        final = result.model_copy(update={"flagged_for_review": flagged})
-
-        # ── Persist to DB cache for next time ─────────────────────────
-        save_cached_text(lookup_key, final.model_dump())
-
-        return final
+    @app.get(
+        "/api/v1/dashboard/word-frequency",
+        response_model=DashboardWordFrequencyResponse,
+    )
+    async def dashboard_word_frequency(limit: int = 20) -> DashboardWordFrequencyResponse:
+        safe_limit = max(1, min(int(limit), 100))
+        return DashboardWordFrequencyResponse(items=list_word_frequencies(safe_limit))
 
     # ------------------------------------------------------------------
     # SCREENSHOT / VISION – cache-first policy

@@ -4,6 +4,7 @@ if (!window.__brainrotContentScriptLoaded) {
   (function () {
   const DEFAULT_API_BASE = "http://127.0.0.1:8000";
   const TEXT_ENDPOINT = "/api/v1/analyze-highlighted-text";
+  const RECHECK_TEXT_ENDPOINT = "/api/v1/recheck-highlighted-text";
   const MEDIA_ENDPOINT = "/api/v1/analyze-screenshot-media";
   const HOVER_DELAY_MS = 600;
   const DEFAULT_SETTINGS = Object.freeze({
@@ -54,6 +55,37 @@ if (!window.__brainrotContentScriptLoaded) {
   let launcher = null;
   let runtimeSettings = { ...DEFAULT_SETTINGS };
   let hoverRequestId = 0;
+  let extensionContextInvalidated = false;
+
+  function hasLiveExtensionContext() {
+    if (extensionContextInvalidated) {
+      return false;
+    }
+    try {
+      return Boolean(chrome?.runtime?.id && chrome?.storage?.local);
+    } catch (error) {
+      extensionContextInvalidated = true;
+      return false;
+    }
+  }
+
+  function markExtensionContextInvalidated(error) {
+    if (
+      error instanceof Error &&
+      error.message.toLowerCase().includes("extension context invalidated")
+    ) {
+      extensionContextInvalidated = true;
+    }
+  }
+
+  function getChromeLastError() {
+    try {
+      return chrome?.runtime?.lastError || null;
+    } catch (error) {
+      markExtensionContextInvalidated(error);
+      return null;
+    }
+  }
 
   function getDebugAnchor() {
     if (launcher && launcher.isConnected) {
@@ -120,14 +152,25 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   async function readSettings() {
-    if (!chrome?.storage?.local) {
+    if (!hasLiveExtensionContext()) {
       return { ...DEFAULT_SETTINGS };
     }
 
     return new Promise((resolve) => {
-      chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS), (result) => {
-        resolve(normalizeSettings(result));
-      });
+      try {
+        chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS), (result) => {
+          const lastError = getChromeLastError();
+          if (lastError) {
+            markExtensionContextInvalidated(lastError);
+            resolve({ ...DEFAULT_SETTINGS });
+            return;
+          }
+          resolve(normalizeSettings(result));
+        });
+      } catch (error) {
+        markExtensionContextInvalidated(error);
+        resolve({ ...DEFAULT_SETTINGS });
+      }
     });
   }
 
@@ -137,18 +180,33 @@ if (!window.__brainrotContentScriptLoaded) {
       ...(partialSettings || {})
     });
 
-    if (!chrome?.storage?.local) {
+    if (!hasLiveExtensionContext()) {
       runtimeSettings = nextSettings;
       refreshLauncherState();
       return nextSettings;
     }
 
     return new Promise((resolve) => {
-      chrome.storage.local.set(nextSettings, () => {
+      try {
+        chrome.storage.local.set(nextSettings, () => {
+          const lastError = getChromeLastError();
+          if (lastError) {
+            markExtensionContextInvalidated(lastError);
+            runtimeSettings = nextSettings;
+            refreshLauncherState();
+            resolve(nextSettings);
+            return;
+          }
+          runtimeSettings = nextSettings;
+          refreshLauncherState();
+          resolve(nextSettings);
+        });
+      } catch (error) {
+        markExtensionContextInvalidated(error);
         runtimeSettings = nextSettings;
         refreshLauncherState();
         resolve(nextSettings);
-      });
+      }
     });
   }
 
@@ -285,36 +343,60 @@ if (!window.__brainrotContentScriptLoaded) {
 
   async function fetchMediaAsset(url) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(
-        { action: "fetchMediaAsset", url },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
+      if (!hasLiveExtensionContext()) {
+        reject(new Error("Extension was reloaded. Refresh this page before using media analysis."));
+        return;
+      }
+
+      try {
+        chrome.runtime.sendMessage(
+          { action: "fetchMediaAsset", url },
+          (response) => {
+            const lastError = getChromeLastError();
+            if (lastError) {
+              markExtensionContextInvalidated(lastError);
+              reject(new Error(lastError.message));
+              return;
+            }
+            if (!response?.ok) {
+              reject(new Error(response?.error || "Unable to fetch media asset."));
+              return;
+            }
+            resolve(response);
           }
-          if (!response?.ok) {
-            reject(new Error(response?.error || "Unable to fetch media asset."));
-            return;
-          }
-          resolve(response);
-        }
-      );
+        );
+      } catch (error) {
+        markExtensionContextInvalidated(error);
+        reject(error instanceof Error ? error : new Error("Media fetch failed."));
+      }
     });
   }
 
   async function captureVisibleTab() {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ action: "captureVisibleTab" }, (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        if (!response?.ok) {
-          reject(new Error(response?.error || "Unable to capture screenshot."));
-          return;
-        }
-        resolve(response.dataUrl);
-      });
+      if (!hasLiveExtensionContext()) {
+        reject(new Error("Extension was reloaded. Refresh this page before using capture."));
+        return;
+      }
+
+      try {
+        chrome.runtime.sendMessage({ action: "captureVisibleTab" }, (response) => {
+          const lastError = getChromeLastError();
+          if (lastError) {
+            markExtensionContextInvalidated(lastError);
+            reject(new Error(lastError.message));
+            return;
+          }
+          if (!response?.ok) {
+            reject(new Error(response?.error || "Unable to capture screenshot."));
+            return;
+          }
+          resolve(response.dataUrl);
+        });
+      } catch (error) {
+        markExtensionContextInvalidated(error);
+        reject(error instanceof Error ? error : new Error("Screenshot capture failed."));
+      }
     });
   }
 
@@ -416,15 +498,65 @@ if (!window.__brainrotContentScriptLoaded) {
         bubble.showInfo(
           selectionData.rect,
           "No Brainrot Detected",
-          result.formal_explanation || "The selected text does not look like slang or meme-coded internet speech."
+          result.formal_explanation || "The selected text does not look like slang or meme-coded internet speech.",
+          "Recheck",
+          async () => {
+            await runSelectionRecheck(selectionData);
+          }
         );
         return;
       }
-      bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText);
+      bubble.showTextAnalysisResult(
+        selectionData.rect,
+        result,
+        selectionData.selectedText,
+        async () => {
+          await runSelectionRecheck(selectionData);
+        }
+      );
     } catch (error) {
       bubble.showError(
         selectionData.rect,
         error instanceof Error ? error.message : "Text analysis failed."
+      );
+    }
+  }
+
+  async function runSelectionRecheck(selectionData) {
+    bubble.showLoadingState(selectionData.rect, "Rechecking highlighted text with DeepSeek...");
+    try {
+      const result = await postJson(RECHECK_TEXT_ENDPOINT, {
+        selected_text: selectionData.selectedText,
+        page_url: window.location.href,
+        surrounding_text: selectionData.surroundingText
+      });
+      if (!result.is_brainrot) {
+        const usedFallback =
+          String(result.model_used || "").includes("fallback") ||
+          result.confidence_score <= 0.35;
+        bubble.showInfo(
+          selectionData.rect,
+          usedFallback ? "Recheck Unavailable" : "Recheck Complete",
+          result.formal_explanation || result.equivalent_text || "DeepSeek did not classify the text as brainrot.",
+          "Recheck Again",
+          async () => {
+            await runSelectionRecheck(selectionData);
+          }
+        );
+        return;
+      }
+      bubble.showTextAnalysisResult(
+        selectionData.rect,
+        result,
+        selectionData.selectedText,
+        async () => {
+          await runSelectionRecheck(selectionData);
+        }
+      );
+    } catch (error) {
+      bubble.showError(
+        selectionData.rect,
+        error instanceof Error ? error.message : "Text recheck failed."
       );
     }
   }
@@ -856,27 +988,31 @@ if (!window.__brainrotContentScriptLoaded) {
     }
   });
 
-  if (chrome?.storage?.onChanged) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local") {
-        return;
-      }
-
-      const updated = { ...runtimeSettings };
-      let changed = false;
-      for (const key of Object.keys(DEFAULT_SETTINGS)) {
-        if (Object.prototype.hasOwnProperty.call(changes, key)) {
-          updated[key] = changes[key].newValue;
-          changed = true;
+  if (hasLiveExtensionContext()) {
+    try {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== "local") {
+          return;
         }
-      }
-      if (!changed) {
-        return;
-      }
 
-      runtimeSettings = normalizeSettings(updated);
-      refreshLauncherState();
-    });
+        const updated = { ...runtimeSettings };
+        let changed = false;
+        for (const key of Object.keys(DEFAULT_SETTINGS)) {
+          if (Object.prototype.hasOwnProperty.call(changes, key)) {
+            updated[key] = changes[key].newValue;
+            changed = true;
+          }
+        }
+        if (!changed) {
+          return;
+        }
+
+        runtimeSettings = normalizeSettings(updated);
+        refreshLauncherState();
+      });
+    } catch (error) {
+      markExtensionContextInvalidated(error);
+    }
   }
 
   async function initialize() {
@@ -885,34 +1021,39 @@ if (!window.__brainrotContentScriptLoaded) {
     refreshLauncherState();
   }
 
-  if (chrome?.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-      if (message?.action === "brainrotPing") {
-        sendResponse({
-          ok: true,
-          href: window.location.href,
-          launcherVisible: Boolean(
-            launcher &&
-            launcher.isConnected &&
-            launcher.style.display !== "none"
-          ),
-          settings: runtimeSettings
-        });
-        return false;
-      }
+  if (hasLiveExtensionContext()) {
+    try {
+      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message?.action === "brainrotPing") {
+          sendResponse({
+            ok: true,
+            href: window.location.href,
+            launcherVisible: Boolean(
+              launcher &&
+              launcher.isConnected &&
+              launcher.style.display !== "none"
+            ),
+            settings: runtimeSettings
+          });
+          return false;
+        }
 
-      if (message?.action === "brainrotShowTestBubble") {
-        bubble.showInfo(
-          getDebugAnchor(),
-          "Page Connection Ready",
-          "The content script is injected on this page. Highlight text, hover a meme image, or use the launcher to test the live flow."
-        );
-        sendResponse({ ok: true });
-        return false;
-      }
+        if (message?.action === "brainrotShowTestBubble") {
+          bubble.showTimedInfo(
+            getDebugAnchor(),
+            "Page Connection Ready",
+            "The content script is injected on this page.",
+            3
+          );
+          sendResponse({ ok: true });
+          return false;
+        }
 
-      return false;
-    });
+        return false;
+      });
+    } catch (error) {
+      markExtensionContextInvalidated(error);
+    }
   }
 
   if (document.readyState === "loading") {

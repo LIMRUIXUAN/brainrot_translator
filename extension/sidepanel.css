@@ -24,3 +24,51 @@
 .callout-copy + .callout-copy {
   margin-top: 10px;
 }
+
+.frequency-status {
+  min-height: 18px;
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.frequency-status.is-error {
+  color: #fca5a5;
+}
+
+.frequency-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.frequency-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.frequency-term {
+  overflow-wrap: anywhere;
+  color: #f8fafc;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.frequency-count {
+  min-width: 34px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(20, 184, 166, 0.16);
+  color: #99f6e4;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}

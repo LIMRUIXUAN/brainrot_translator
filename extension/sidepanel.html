@@ -163,6 +163,18 @@
           </article>
         </div>
       </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Dashboard</p>
+            <h2>Brainrot Frequency</h2>
+          </div>
+          <button id="refreshFrequencyButton" class="ghost-button" type="button">Refresh</button>
+        </div>
+        <div id="frequencyStatus" class="frequency-status" aria-live="polite">No dashboard check yet.</div>
+        <ol id="frequencyList" class="frequency-list"></ol>
+      </section>
     </main>
 
     <script src="popup.js"></script>

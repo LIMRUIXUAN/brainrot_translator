@@ -114,6 +114,23 @@ class CachedImageAnalysis(Base):
     )
 
 
+class BrainrotWordFrequency(Base):
+    """Dashboard counter for slang terms found in highlighted text requests."""
+
+    __tablename__ = "brainrot_word_frequency"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    normalized_term: Mapped[str] = mapped_column(String(256), unique=True, nullable=False, index=True)
+    display_label: Mapped[str] = mapped_column(String(256), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    last_page_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+
+
 # ---------------------------------------------------------------------------
 # Engine / session factory
 # ---------------------------------------------------------------------------
@@ -287,30 +304,116 @@ def lookup_cached_text(lookup_key: str) -> Optional[dict[str, Any]]:
 
 
 def save_cached_text(lookup_key: str, data: dict[str, Any]) -> bool:
-    """Persist a text translation result into the cache table."""
+    """Persist or refresh a text translation result in the cache table."""
     session_factory = get_session_factory()
     if session_factory is None:
         return False
 
-    record = CachedTextTranslation(
-        lookup_key=lookup_key,
-        is_brainrot=bool(data.get("is_brainrot", False)),
-        brainrot_text=data.get("brainrot_text"),
-        equivalent_text=data.get("equivalent_text"),
-        formal_explanation=data.get("formal_explanation"),
-        sentiment_label=data.get("sentiment_label", "unclear"),
-        sentiment_rationale=data.get("sentiment_rationale"),
-        confidence_score=float(data.get("confidence_score", 0.0)),
-        model_used=data.get("model_used"),
-    )
-
     try:
         with session_factory() as session:
-            session.add(record)
+            row = (
+                session.query(CachedTextTranslation)
+                .filter(CachedTextTranslation.lookup_key == lookup_key)
+                .first()
+            )
+            if row is None:
+                row = CachedTextTranslation(lookup_key=lookup_key)
+                session.add(row)
+
+            row.is_brainrot = bool(data.get("is_brainrot", False))
+            row.brainrot_text = data.get("brainrot_text")
+            row.equivalent_text = data.get("equivalent_text")
+            row.formal_explanation = data.get("formal_explanation")
+            row.sentiment_label = data.get("sentiment_label", "unclear")
+            row.sentiment_rationale = data.get("sentiment_rationale")
+            row.confidence_score = float(data.get("confidence_score", 0.0))
+            row.model_used = data.get("model_used")
             session.commit()
         return True
     except SQLAlchemyError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Dashboard word-frequency helpers
+# ---------------------------------------------------------------------------
+
+def increment_word_frequencies(
+    terms: dict[str, str],
+    *,
+    page_url: Optional[str] = None,
+) -> bool:
+    """Increment dashboard counters for matched highlighted-text slang terms."""
+    if not terms:
+        return True
+
+    session_factory = get_session_factory()
+    if session_factory is None:
+        return False
+
+    now = datetime.now(timezone.utc)
+    cleaned_page_url = (page_url or "").strip() or None
+
+    try:
+        with session_factory() as session:
+            for normalized_term, display_label in terms.items():
+                normalized = normalized_term.strip().casefold()
+                label = display_label.strip()
+                if not normalized or not label:
+                    continue
+
+                row = (
+                    session.query(BrainrotWordFrequency)
+                    .filter(BrainrotWordFrequency.normalized_term == normalized)
+                    .first()
+                )
+                if row is None:
+                    row = BrainrotWordFrequency(
+                        normalized_term=normalized,
+                        display_label=label,
+                        count=0,
+                    )
+                    session.add(row)
+
+                row.display_label = label
+                row.count += 1
+                row.last_seen_at = now
+                row.last_page_url = cleaned_page_url
+            session.commit()
+        return True
+    except SQLAlchemyError:
+        return False
+
+
+def list_word_frequencies(limit: int = 20) -> list[dict[str, Any]]:
+    """Return dashboard counters sorted by frequency, then recency."""
+    session_factory = get_session_factory()
+    if session_factory is None:
+        return []
+
+    safe_limit = max(1, min(int(limit), 100))
+    try:
+        with session_factory() as session:
+            rows = (
+                session.query(BrainrotWordFrequency)
+                .order_by(
+                    BrainrotWordFrequency.count.desc(),
+                    BrainrotWordFrequency.last_seen_at.desc(),
+                    BrainrotWordFrequency.display_label.asc(),
+                )
+                .limit(safe_limit)
+                .all()
+            )
+            return [
+                {
+                    "term": row.display_label,
+                    "count": row.count,
+                    "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+                }
+                for row in rows
+            ]
+    except SQLAlchemyError:
+        return []
 
 
 # ---------------------------------------------------------------------------
