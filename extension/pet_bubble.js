@@ -21,7 +21,66 @@ if (!window.__brainrotPetBubbleLoaded) {
       container.setAttribute("aria-live", "polite");
       document.body.appendChild(container);
       this.container = container;
+      this.makeDraggable(container, container);
       return container;
+    }
+
+    makeDraggable(container, handle) {
+      if (!handle) {
+        return;
+      }
+      let dragState = null;
+
+      function finishDrag() {
+        if (!dragState) {
+          return;
+        }
+        handle.classList.remove("is-dragging");
+        dragState = null;
+      }
+
+      handle.addEventListener("pointerdown", (event) => {
+        // Do not drag if clicking input, button, select, details, or summary
+        const target = event.target;
+        if (
+          target.closest("button, a, input, details, summary, select, img, [data-brainrot-copy], [data-brainrot-recheck], [data-brainrot-close]")
+        ) {
+          return;
+        }
+        if (event.button !== 0) {
+          return;
+        }
+
+        const rect = container.getBoundingClientRect();
+        dragState = {
+          offsetX: event.clientX - rect.left,
+          offsetY: event.clientY - rect.top
+        };
+        handle.classList.add("is-dragging");
+        handle.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+      });
+
+      handle.addEventListener("pointermove", (event) => {
+        if (!dragState) {
+          return;
+        }
+
+        const left = event.clientX - dragState.offsetX;
+        const top = event.clientY - dragState.offsetY;
+
+        // Constraint bounds (stay in screen viewport)
+        const maxLeft = window.innerWidth - container.offsetWidth;
+        const maxTop = window.innerHeight - container.offsetHeight;
+
+        container.style.left = `${Math.max(0, Math.min(maxLeft, left))}px`;
+        container.style.top = `${Math.max(0, Math.min(maxTop, top))}px`;
+        container.style.right = "auto";
+        container.style.bottom = "auto";
+      });
+
+      handle.addEventListener("pointerup", finishDrag);
+      handle.addEventListener("pointercancel", finishDrag);
     }
 
     getRect(anchor) {

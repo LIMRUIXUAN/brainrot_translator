@@ -301,6 +301,12 @@
     linear-gradient(140deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96));
   box-shadow: 0 22px 48px rgba(15, 23, 42, 0.38);
   backdrop-filter: blur(12px);
+  cursor: grab;
+}
+
+#brainrot-pet-bubble.is-dragging,
+#brainrot-pet-bubble.is-dragging * {
+  cursor: grabbing !important;
 }
 
 .brainrot-bubble-loading {
@@ -502,3 +508,52 @@
     grid-template-columns: 1fr;
   }
 }
+
+.brainrot-bubble-details {
+  margin-top: 12px;
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  overflow: hidden;
+  transition: border-color 150ms ease;
+}
+
+.brainrot-bubble-details:hover {
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.brainrot-bubble-summary {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #93c5fd;
+  cursor: pointer;
+  user-select: none;
+  list-style: none; /* Hide standard list triangle */
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brainrot-bubble-summary::-webkit-details-marker {
+  display: none; /* Safari summary arrow removal */
+}
+
+.brainrot-bubble-summary::after {
+  content: "▼";
+  font-size: 8px;
+  transition: transform 180ms ease;
+  color: #cbd5e1;
+}
+
+details[open] .brainrot-bubble-summary::after {
+  transform: rotate(180deg);
+}
+
+.brainrot-bubble-details-content {
+  padding: 0 12px 12px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
