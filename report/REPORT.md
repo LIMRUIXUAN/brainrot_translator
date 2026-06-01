@@ -8,7 +8,7 @@ The main machine learning approach is a Sequence-to-Sequence (Seq2Seq) text gene
 
 In addition to the model-training workflow, the project also includes a local FastAPI backend and a Chrome Manifest V3 browser extension. The extension provides an interface for users to translate highlighted slang text on webpages, recheck selected text, analyze image or GIF meme content through the backend, and view usage statistics through a side panel dashboard. These application components support the trained model but are separate from the core machine learning training process.
 
-![Project Pet Shell Dashboard UI](../screenshots/01-project-notebook.png)
+![Project Pet Shell Dashboard UI](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/01-project-notebook.png)
 
 ## 2. Project Objectives
 
@@ -96,7 +96,7 @@ The current dataset extension report states:
 | `quality_label` | Quality label assigned during dataset preparation. | `synthetic_high_quality` |
 | `reason` | Short explanation of why the row exists or how it was generated. | `Standard term definition task for rizz.` |
 
-![Dataset Preview](../screenshots/02-dataset-preview.png)
+![Dataset Preview](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/02-dataset-preview.png)
 
 ## 6. Data Preprocessing
 
@@ -114,7 +114,7 @@ The project includes dataset preparation and repair scripts in the `scripts/` fo
 | Split dataset into training and validation sets | Allow evaluation on unseen data. | Notebook uses a train/test split with `test_size=0.15` |
 | Prepare instruction format | Make the model learn the intended task explicitly. | Inputs use `Convert brainrot English to normal English:` prefix |
 
-![Data Preprocessing Code](../screenshots/03-data-preprocessing.png)
+![Data Preprocessing Code](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/03-data-preprocessing.png)
 
 ## 7. Tokenization Process
 
@@ -295,9 +295,9 @@ For the optional quality classifier model, the training run shows the following 
 This classifier evidence is secondary. The main project evaluation remains the Seq2Seq translator training and validation loss, because translation is the primary project task.
 
 >**Evaluation Result of Translator Model**
-![Evaluation Result of Translator](../screenshots/08-evaluation-result.png)
+![Evaluation Result of Translator](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/08-evaluation-result.png)
 >**Evaluation Result of Classifier Model**
-![Evaluation Result of Classifier](../screenshots/08-evaluation-result2.png)
+![Evaluation Result of Classifier](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/08-evaluation-result2.png)
 
 ## 12. Sample Translation Testing
 
@@ -333,7 +333,7 @@ def translate(text):
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 ```
 
-![Sample Translation Output](../screenshots/09-sample-translation-output.png)
+![Sample Translation Output](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/09-sample-translation-output.png)
 
 The screenshot above should show:
 
@@ -384,16 +384,16 @@ The extension can perform the following functions:
 
 >**Browser Extension Side Panel**
 
->![Browser Extension Side Panel](../screenshots/10-extension-side-panel.png)
+>![Browser Extension Side Panel](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/10-extension-side-panel.png)
 
 >**Floating Launcher or Translation Bubble**
-![Floating Launcher or Translation Bubble](../screenshots/11-floating-launcher.png)
+![Floating Launcher or Translation Bubble](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/11-floating-launcher.png)
 
 >**Translate Brainrot to English**
-![Floating Launcher display Text Translate](../screenshots/12-text-translator.png)
+![Floating Launcher display Text Translate](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/12-text-translator.png)
 
 >**Hover Image**
-![Floating Launcher display Image Intepret](../screenshots/13-hover-img.png)
+![Floating Launcher display Image Intepret](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/13-hover-img.png)
 
 The screenshot above show:
 
@@ -470,7 +470,7 @@ The backend exposes the following important endpoints:
 | `POST /api/v1/analyze-image` | Alias endpoint for image analysis. |
 
 >**System Architecture Diagram**
-![System Architecture Diagram](../screenshots/14-system-architecture.png)
+![System Architecture Diagram](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/14-system-architecture.png)
 
 The screenshot or diagram above should show:
 
@@ -547,11 +547,11 @@ files.download("brainrot-translator-v1.zip")
 
 > Screenshot of saving `brainrot-translator-v1`
 
-![Translator Model Saving Screenshot](../screenshots/15-model-saving-translator.png)
+![Translator Model Saving Screenshot](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/15-model-saving-translator.png)
 
 > Screenshot of saving `brainrot-quality-classifier-v1`
 
-![Classifier Model Saving Screenshot](../screenshots/16-model-saving-classifier.png)
+![Classifier Model Saving Screenshot](https://raw.githubusercontent.com/LIMRUIXUAN/brainrot_translator/brainrot_to_english_v1/screenshots/16-model-saving-classifier.png)
 
 The screenshot above should show:
 
