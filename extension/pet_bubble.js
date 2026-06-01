@@ -241,10 +241,12 @@ if (!window.__brainrotPetBubbleLoaded) {
             <div class="brainrot-bubble-label">Equivalent Text</div>
             <div class="brainrot-bubble-value brainrot-bubble-value--formal">"${this.escapeHtml(equivalent)}"</div>
           </div>
-          <div class="brainrot-bubble-block">
-            <div class="brainrot-bubble-label">Context</div>
-            <div class="brainrot-bubble-copy">${this.escapeHtml(explanation)}</div>
-          </div>
+          <details class="brainrot-bubble-details">
+            <summary class="brainrot-bubble-summary">Explain Context</summary>
+            <div class="brainrot-bubble-details-content">
+              ${this.escapeHtml(explanation)}
+            </div>
+          </details>
           <div class="brainrot-bubble-meta">
             ${chips.join("")}
           </div>
@@ -291,10 +293,12 @@ if (!window.__brainrotPetBubbleLoaded) {
               <div class="brainrot-bubble-kicker">Image or GIF</div>
               <div class="brainrot-bubble-heading">This meme means</div>
               <div class="brainrot-bubble-value">"${this.escapeHtml(meaning)}"</div>
-              <div class="brainrot-bubble-block">
-                <div class="brainrot-bubble-label">Formal English</div>
-                <div class="brainrot-bubble-value brainrot-bubble-value--formal">"${this.escapeHtml(explanation)}"</div>
-              </div>
+              <details class="brainrot-bubble-details">
+                <summary class="brainrot-bubble-summary">Explain Context</summary>
+                <div class="brainrot-bubble-details-content">
+                  ${this.escapeHtml(explanation)}
+                </div>
+              </details>
               <div class="brainrot-bubble-meta">
                 ${chips.join("")}
               </div>

@@ -134,9 +134,9 @@
         modelTone = "warn";
       }
     } else if (localModelAvailable) {
-      modelStatus = "Load failed";
-      modelHint = "Model folder exists, but the backend could not load it.";
-      modelTone = "error";
+      modelStatus = "Available";
+      modelHint = "Local model folder found. It will load dynamically on first request.";
+      modelTone = "ok";
     } else if (payload.openrouter_configured) {
       modelStatus = "OpenRouter";
       modelHint = "Text fallback and image/GIF analysis can use OpenRouter.";

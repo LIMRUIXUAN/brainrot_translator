@@ -519,7 +519,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -527,9 +527,17 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, object]:
         local_text_model_available = settings.model_dir.exists()
-        local_text_model_loaded = get_model_components() is not None
+        local_text_model_loaded = (
+            get_model_components.cache_info().currsize > 0
+            if hasattr(get_model_components, "cache_info")
+            else False
+        )
         local_quality_classifier_available = settings.quality_classifier_dir.exists()
-        local_quality_classifier_loaded = get_quality_classifier_components() is not None
+        local_quality_classifier_loaded = (
+            get_quality_classifier_components.cache_info().currsize > 0
+            if hasattr(get_quality_classifier_components, "cache_info")
+            else False
+        )
         return {
             "status": "ok",
             "database_configured": bool(check_database_connection()),
