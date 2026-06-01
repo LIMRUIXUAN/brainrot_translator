@@ -476,3 +476,37 @@ def save_cached_image(image_hash: str, data: dict[str, Any]) -> bool:
         return True
     except SQLAlchemyError:
         return False
+
+
+def get_dashboard_stats() -> dict[str, Any]:
+    """Return aggregate dashboard statistics."""
+    session_factory = get_session_factory()
+    defaults: dict[str, Any] = {
+        "total_text_analyses": 0,
+        "total_image_analyses": 0,
+        "unique_terms": 0,
+        "top_term": None,
+        "top_term_count": 0,
+    }
+    if session_factory is None:
+        return defaults
+
+    try:
+        with session_factory() as session:
+            total_text = session.query(CachedTextTranslation).count()
+            total_image = session.query(CachedImageAnalysis).count()
+            unique_terms = session.query(BrainrotWordFrequency).count()
+            top_row = (
+                session.query(BrainrotWordFrequency)
+                .order_by(BrainrotWordFrequency.count.desc())
+                .first()
+            )
+            return {
+                "total_text_analyses": total_text,
+                "total_image_analyses": total_image,
+                "unique_terms": unique_terms,
+                "top_term": top_row.display_label if top_row else None,
+                "top_term_count": top_row.count if top_row else 0,
+            }
+    except SQLAlchemyError:
+        return defaults

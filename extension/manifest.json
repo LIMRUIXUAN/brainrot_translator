@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Brainrot Translator",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Detects brainrot text and image/GIF meme semantics on the web.",
   "permissions": [
     "activeTab",
+    "contextMenus",
     "scripting",
     "sidePanel",
     "storage",
@@ -15,6 +16,15 @@
   },
   "side_panel": {
     "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "translate-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+B",
+        "mac": "Command+Shift+B"
+      },
+      "description": "Translate selected brainrot text"
+    }
   },
   "host_permissions": [
     "<all_urls>",

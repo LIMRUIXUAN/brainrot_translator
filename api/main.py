@@ -18,6 +18,7 @@ from .database import (
     check_database_connection,
     flag_image_for_review,
     flag_text_for_review,
+    get_dashboard_stats,
     increment_word_frequencies,
     list_word_frequencies,
     load_slang_terms_index,
@@ -28,6 +29,7 @@ from .database import (
 )
 from .local_translator import MockLocalTranslator
 from .schemas import (
+    DashboardStatsResponse,
     DashboardWordFrequencyResponse,
     HighlightedTextAnalysisRequest,
     HighlightedTextAnalysisResponse,
@@ -298,8 +300,15 @@ def translate_text(text: str) -> TranslateResponse:
 
 def _looks_like_brainrot_text(text: str) -> bool:
     lowered = text.casefold()
+    # Check static markers first (fast)
     for marker in SLANG_TEXT_MARKERS:
         pattern = rf"(?<![a-z0-9]){re.escape(marker.casefold())}(?![a-z0-9])"
+        if re.search(pattern, lowered):
+            return True
+
+    # Check dynamic slang terms index keys
+    for marker in load_slang_terms_index().keys():
+        pattern = rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])"
         if re.search(pattern, lowered):
             return True
     return False
@@ -409,8 +418,11 @@ def decode_base64_payload(value: str, *, field_name: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 def _normalise_text_key(raw: str) -> str:
-    """Trim whitespace, lowercase – used as the cache lookup key for text."""
-    return raw.strip().casefold()
+    """Trim whitespace, lowercase, strip punctuation, and condense spaces."""
+    cleaned = raw.strip().casefold()
+    cleaned = re.sub(r"[^\w\s]", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
 
 
 def _hash_image_payload(image_base64: str) -> str:
@@ -481,6 +493,9 @@ async def _run_openrouter_text_analysis(
         selected_text=request.selected_text,
         page_url=request.page_url,
         surrounding_text=request.surrounding_text,
+        page_title=request.page_title,
+        page_domain=request.page_domain,
+        nearest_heading=request.nearest_heading,
     )
     final = _stage_low_confidence_text(request, result)
     save_cached_text(lookup_key, final.model_dump())
@@ -509,7 +524,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -517,9 +532,17 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, object]:
         local_text_model_available = settings.model_dir.exists()
-        local_text_model_loaded = get_model_components() is not None
+        local_text_model_loaded = (
+            get_model_components.cache_info().currsize > 0
+            if hasattr(get_model_components, "cache_info")
+            else False
+        )
         local_quality_classifier_available = settings.quality_classifier_dir.exists()
-        local_quality_classifier_loaded = get_quality_classifier_components() is not None
+        local_quality_classifier_loaded = (
+            get_quality_classifier_components.cache_info().currsize > 0
+            if hasattr(get_quality_classifier_components, "cache_info")
+            else False
+        )
         return {
             "status": "ok",
             "database_configured": bool(check_database_connection()),
@@ -637,6 +660,14 @@ def create_app() -> FastAPI:
         safe_limit = max(1, min(int(limit), 100))
         return DashboardWordFrequencyResponse(items=list_word_frequencies(safe_limit))
 
+    @app.get(
+        "/api/v1/dashboard/stats",
+        response_model=DashboardStatsResponse,
+    )
+    async def dashboard_stats() -> DashboardStatsResponse:
+        raw = get_dashboard_stats()
+        return DashboardStatsResponse(**raw)
+
     # ------------------------------------------------------------------
     # SCREENSHOT / VISION – cache-first policy
     # ------------------------------------------------------------------
@@ -686,6 +717,8 @@ def create_app() -> FastAPI:
             source_url=request.source_url,
             frame0_base64=request.frame0_base64,
             frame0_media_type=request.frame0_media_type,
+            page_title=request.page_title,
+            page_domain=request.page_domain,
         )
 
         flagged = result.flagged_for_review or result.confidence_score < settings.low_confidence_threshold

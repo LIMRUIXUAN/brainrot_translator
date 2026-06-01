@@ -58,7 +58,7 @@
   display: grid;
   place-items: center;
   font-size: 26px;
-  background: url('shocked_black_guy.jpg') center/cover;
+  background: linear-gradient(135deg, #fbbf24, #d97706);
   color: #111827;
   box-shadow: inset 0 2px 8px rgba(255, 255, 255, 0.22);
 }
@@ -94,7 +94,7 @@
 
 .brainrot-launcher-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-items: stretch;
 }
@@ -146,35 +146,51 @@
   border: 1px solid rgba(239, 68, 68, 0.24);
 }
 
-.brainrot-launcher-button--icon {
-  display: grid;
-  place-items: center;
-  aspect-ratio: 1;
-  padding: 0;
-  background: rgba(15, 23, 42, 0.42);
-  color: #f8fafc;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  font-size: 20px;
-  line-height: 1;
-}
-
 .brainrot-launcher-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
   transform: none;
 }
 
-.brainrot-launcher-scale-label {
-  min-height: 42px;
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  background: rgba(148, 163, 184, 0.12);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+.brainrot-launcher-scale-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.brainrot-launcher-scale-btn {
+  border: 0;
+  background: transparent;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color 120ms ease;
+  user-select: none;
+}
+
+.brainrot-launcher-scale-btn:hover {
+  color: #f8fafc;
+}
+
+.brainrot-launcher-scale-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+  color: #94a3b8;
+}
+
+.brainrot-launcher-scale-value {
   color: #cbd5e1;
   font-size: 12px;
   font-weight: 800;
   user-select: none;
+  min-width: 36px;
+  text-align: center;
 }
 
 .brainrot-launcher-edge-toggle,
@@ -285,6 +301,12 @@
     linear-gradient(140deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96));
   box-shadow: 0 22px 48px rgba(15, 23, 42, 0.38);
   backdrop-filter: blur(12px);
+  cursor: grab;
+}
+
+#brainrot-pet-bubble.is-dragging,
+#brainrot-pet-bubble.is-dragging * {
+  cursor: grabbing !important;
 }
 
 .brainrot-bubble-loading {
@@ -301,7 +323,7 @@
   display: grid;
   place-items: center;
   font-size: 20px;
-  background: url('shocked_black_guy.jpg') center/cover;
+  background: linear-gradient(135deg, #fbbf24, #d97706);
   color: #111827;
 }
 
@@ -471,7 +493,7 @@
 
   .brainrot-launcher-actions {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .brainrot-launcher-button {
@@ -486,3 +508,89 @@
     grid-template-columns: 1fr;
   }
 }
+
+.brainrot-bubble-details {
+  margin-top: 12px;
+  border-radius: 14px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  overflow: hidden;
+  transition: border-color 150ms ease;
+}
+
+.brainrot-bubble-details:hover {
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.brainrot-bubble-summary {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #93c5fd;
+  cursor: pointer;
+  user-select: none;
+  list-style: none; /* Hide standard list triangle */
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brainrot-bubble-summary::-webkit-details-marker {
+  display: none; /* Safari summary arrow removal */
+}
+
+.brainrot-bubble-summary::after {
+  content: "▼";
+  font-size: 8px;
+  transition: transform 180ms ease;
+  color: #cbd5e1;
+}
+
+details[open] .brainrot-bubble-summary::after {
+  transform: rotate(180deg);
+}
+
+.brainrot-bubble-details-content {
+  padding: 0 12px 12px 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+/* ── Phase 2: Translation bubble card styling ───────────────── */
+.brainrot-bubble-translation-card {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.brainrot-bubble-original {
+  font-family: monospace;
+  font-size: 13px;
+  color: #94a3b8;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.brainrot-bubble-arrow {
+  align-self: center;
+  font-size: 16px;
+  color: #38bdf8;
+  line-height: 1;
+  font-weight: bold;
+}
+
+.brainrot-bubble-translated {
+  font-size: 14px;
+  font-weight: 700;
+  color: #bbf7d0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+
