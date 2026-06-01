@@ -30,24 +30,17 @@ if (!window.__brainrotContentScriptLoaded) {
     "cdn.discordapp.com"
   ];
   const BRAINROT_KEYWORDS = [
-    "meme",
-    "ratio",
-    "sigma",
-    "skill",
-    "ohio",
-    "npc",
-    "cope",
-    "skibidi",
-    "grimace",
-    "caught",
-    "based",
-    "slay",
-    "rizz",
-    "aura",
-    "mid",
-    "bffr",
-    "ate"
+    "meme", "ratio", "sigma", "skill", "ohio", "npc", "cope",
+    "skibidi", "grimace", "caught", "based", "slay", "rizz",
+    "aura", "mid", "bffr", "ate"
   ];
+
+  /* ── Phase 4: Retry / Rate-Limit / Dedup constants ───────────── */
+  const MAX_RETRIES = 2;
+  const BASE_RETRY_DELAY_MS = 1000;
+  const RATE_LIMIT_COOLDOWN_MS = 3000;
+  const inflightRequests = new Set();
+  let lastRequestTimestamp = 0;
 
   const bubble = new window.BrainrotPetBubble();
   let hoverTimer = null;
@@ -57,10 +50,35 @@ if (!window.__brainrotContentScriptLoaded) {
   let hoverRequestId = 0;
   let extensionContextInvalidated = false;
 
-  function hasLiveExtensionContext() {
-    if (extensionContextInvalidated) {
-      return false;
+  /* ── Phase 8: Custom dictionary cache ────────────────────────── */
+  let customDictionary = [];
+
+  function loadCustomDictionary() {
+    if (!hasLiveExtensionContext()) return;
+    try {
+      chrome.storage.local.get({ brainrotCustomDictionary: [] }, (result) => {
+        if (getChromeLastError()) return;
+        customDictionary = Array.isArray(result.brainrotCustomDictionary)
+          ? result.brainrotCustomDictionary : [];
+      });
+    } catch (e) {
+      markExtensionContextInvalidated(e);
     }
+  }
+
+  function lookupCustomDictionary(text) {
+    const lowered = text.trim().toLowerCase();
+    for (const entry of customDictionary) {
+      if (entry.term && entry.term.toLowerCase() === lowered) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  /* ── Extension context helpers ───────────────────────────────── */
+  function hasLiveExtensionContext() {
+    if (extensionContextInvalidated) return false;
     try {
       return Boolean(chrome?.runtime?.id && chrome?.storage?.local);
     } catch (error) {
@@ -70,10 +88,7 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   function markExtensionContextInvalidated(error) {
-    if (
-      error instanceof Error &&
-      error.message.toLowerCase().includes("extension context invalidated")
-    ) {
+    if (error instanceof Error && error.message.toLowerCase().includes("extension context invalidated")) {
       extensionContextInvalidated = true;
     }
   }
@@ -88,12 +103,11 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   function getDebugAnchor() {
-    if (launcher && launcher.isConnected) {
-      return launcher;
-    }
+    if (launcher && launcher.isConnected) return launcher;
     return new DOMRect(window.innerWidth / 2, 120, 1, 1);
   }
 
+  /* ── Settings ────────────────────────────────────────────────── */
   function normalizeSettings(rawSettings) {
     const raw = rawSettings || {};
     const apiBaseUrl =
@@ -142,29 +156,17 @@ if (!window.__brainrotContentScriptLoaded) {
 
   function clampLauncherScale(value) {
     const numeric = Number(value);
-    if (!Number.isFinite(numeric)) {
-      return DEFAULT_SETTINGS.brainrotLauncherScale;
-    }
-    return Math.min(
-      MAX_LAUNCHER_SCALE,
-      Math.max(MIN_LAUNCHER_SCALE, Math.round(numeric * 10) / 10)
-    );
+    if (!Number.isFinite(numeric)) return DEFAULT_SETTINGS.brainrotLauncherScale;
+    return Math.min(MAX_LAUNCHER_SCALE, Math.max(MIN_LAUNCHER_SCALE, Math.round(numeric * 10) / 10));
   }
 
   async function readSettings() {
-    if (!hasLiveExtensionContext()) {
-      return { ...DEFAULT_SETTINGS };
-    }
-
+    if (!hasLiveExtensionContext()) return { ...DEFAULT_SETTINGS };
     return new Promise((resolve) => {
       try {
         chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS), (result) => {
           const lastError = getChromeLastError();
-          if (lastError) {
-            markExtensionContextInvalidated(lastError);
-            resolve({ ...DEFAULT_SETTINGS });
-            return;
-          }
+          if (lastError) { markExtensionContextInvalidated(lastError); resolve({ ...DEFAULT_SETTINGS }); return; }
           resolve(normalizeSettings(result));
         });
       } catch (error) {
@@ -175,28 +177,17 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   async function writeSettings(partialSettings) {
-    const nextSettings = normalizeSettings({
-      ...runtimeSettings,
-      ...(partialSettings || {})
-    });
-
+    const nextSettings = normalizeSettings({ ...runtimeSettings, ...(partialSettings || {}) });
     if (!hasLiveExtensionContext()) {
       runtimeSettings = nextSettings;
       refreshLauncherState();
       return nextSettings;
     }
-
     return new Promise((resolve) => {
       try {
         chrome.storage.local.set(nextSettings, () => {
           const lastError = getChromeLastError();
-          if (lastError) {
-            markExtensionContextInvalidated(lastError);
-            runtimeSettings = nextSettings;
-            refreshLauncherState();
-            resolve(nextSettings);
-            return;
-          }
+          if (lastError) markExtensionContextInvalidated(lastError);
           runtimeSettings = nextSettings;
           refreshLauncherState();
           resolve(nextSettings);
@@ -214,32 +205,102 @@ if (!window.__brainrotContentScriptLoaded) {
     return runtimeSettings.brainrotApiBaseUrl || DEFAULT_API_BASE;
   }
 
-  async function postJson(path, payload) {
-    const base = await getApiBaseUrl();
-    const response = await fetch(`${base}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(body.detail || body.error || "Backend request failed.");
-    }
-    return body;
+  /* ── Phase 1: Page context helpers ───────────────────────────── */
+  function getPageContext() {
+    return {
+      page_title: document.title || null,
+      page_domain: window.location.hostname || null,
+      page_url: window.location.href
+    };
   }
 
+  function getNearestHeading(range) {
+    if (!range) return null;
+    let node = range.commonAncestorContainer;
+    if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+    while (node && node !== document.body) {
+      const heading = node.querySelector("h1, h2, h3, h4");
+      if (heading) return heading.textContent?.trim()?.slice(0, 200) || null;
+      node = node.parentElement;
+    }
+    const pageH1 = document.querySelector("h1");
+    return pageH1 ? pageH1.textContent?.trim()?.slice(0, 200) || null : null;
+  }
+
+  /* ── Phase 4: Retry wrapper with exponential backoff ─────────── */
+  async function postJsonWithRetry(path, payload) {
+    // Rate limit check
+    const now = Date.now();
+    if (now - lastRequestTimestamp < RATE_LIMIT_COOLDOWN_MS) {
+      const requestKey = JSON.stringify(payload).slice(0, 200);
+      if (inflightRequests.has(requestKey)) {
+        throw new Error("Duplicate request — please wait a moment.");
+      }
+    }
+    lastRequestTimestamp = Date.now();
+
+    // Offline check
+    if (!navigator.onLine) {
+      throw new Error("You appear to be offline. Check your connection and try again.");
+    }
+
+    const base = await getApiBaseUrl();
+    let lastError = null;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(`${base}${path}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.detail || body.error || "Backend request failed.");
+        }
+        return body;
+      } catch (error) {
+        lastError = error;
+        if (attempt < MAX_RETRIES) {
+          const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+    throw lastError || new Error("Request failed after retries.");
+  }
+
+  // Keep legacy postJson as alias for non-retryable calls
+  async function postJson(path, payload) {
+    return postJsonWithRetry(path, payload);
+  }
+
+  /* ── Phase 3: History helper ─────────────────────────────────── */
+  function saveToHistory(entry) {
+    if (!hasLiveExtensionContext()) return;
+    try {
+      chrome.runtime.sendMessage({
+        action: "brainrotSaveHistory",
+        entry: {
+          timestamp: new Date().toISOString(),
+          type: entry.type || "text",
+          original: entry.original || "",
+          translation: entry.translation || "",
+          sentiment: entry.sentiment || "unclear",
+          confidence: entry.confidence || 0,
+          source_url: entry.source_url || "",
+          page_url: window.location.href,
+          page_title: document.title || ""
+        }
+      });
+    } catch (e) {
+      // Ignore — extension context may be gone
+    }
+  }
+
+  /* ── Media helpers (unchanged core logic) ────────────────────── */
   function getMediaUrl(element) {
-    if (!element) {
-      return null;
-    }
-
-    if (element.tagName === "IMG") {
-      return element.currentSrc || element.src || null;
-    }
-
+    if (!element) return null;
+    if (element.tagName === "IMG") return element.currentSrc || element.src || null;
     const backgroundImage = window.getComputedStyle(element).backgroundImage || "";
     const match = backgroundImage.match(/url\(["']?(.*?)["']?\)/i);
     return match ? match[1] : null;
@@ -247,15 +308,9 @@ if (!window.__brainrotContentScriptLoaded) {
 
   function getMediaType(url) {
     const normalized = (url || "").toLowerCase();
-    if (normalized.endsWith(".gif") || normalized.includes("format=gif")) {
-      return "image/gif";
-    }
-    if (normalized.endsWith(".png")) {
-      return "image/png";
-    }
-    if (normalized.endsWith(".webp")) {
-      return "image/webp";
-    }
+    if (normalized.endsWith(".gif") || normalized.includes("format=gif")) return "image/gif";
+    if (normalized.endsWith(".png")) return "image/png";
+    if (normalized.endsWith(".webp")) return "image/webp";
     return "image/jpeg";
   }
 
@@ -263,9 +318,7 @@ if (!window.__brainrotContentScriptLoaded) {
     try {
       const hostname = new URL(url, window.location.href).hostname.toLowerCase();
       return MEME_HOSTS.some((host) => hostname.includes(host));
-    } catch (error) {
-      return false;
-    }
+    } catch (error) { return false; }
   }
 
   function hasKeywordHint(url) {
@@ -275,23 +328,14 @@ if (!window.__brainrotContentScriptLoaded) {
 
   function hasMemeLikeAspectRatio(element) {
     const rect = element.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      return false;
-    }
-
-    // Reject tiny icons or 1px trackers
-    if (rect.width < 100 || rect.height < 100) {
-      return false;
-    }
+    if (!rect.width || !rect.height) return false;
+    if (rect.width < 100 || rect.height < 100) return false;
     return true;
   }
 
   function isMemeCandidate(element) {
     const url = getMediaUrl(element);
-    if (!url) {
-      return false;
-    }
-
+    if (!url) return false;
     return hasMemeHost(url) || hasKeywordHint(url) || hasMemeLikeAspectRatio(element);
   }
 
@@ -326,19 +370,11 @@ if (!window.__brainrotContentScriptLoaded) {
     const height = image.naturalHeight || fallbackHeight;
     canvas.width = width;
     canvas.height = height;
-
     const context = canvas.getContext("2d");
-    if (!context) {
-      throw new Error("Canvas is unavailable for GIF fallback extraction.");
-    }
-
+    if (!context) throw new Error("Canvas is unavailable for GIF fallback extraction.");
     context.drawImage(image, 0, 0, width, height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
-    return {
-      dataUrl,
-      base64: dataUrlToBase64(dataUrl),
-      mediaType: "image/jpeg"
-    };
+    return { dataUrl, base64: dataUrlToBase64(dataUrl), mediaType: "image/jpeg" };
   }
 
   async function fetchMediaAsset(url) {
@@ -347,24 +383,13 @@ if (!window.__brainrotContentScriptLoaded) {
         reject(new Error("Extension was reloaded. Refresh this page before using media analysis."));
         return;
       }
-
       try {
-        chrome.runtime.sendMessage(
-          { action: "fetchMediaAsset", url },
-          (response) => {
-            const lastError = getChromeLastError();
-            if (lastError) {
-              markExtensionContextInvalidated(lastError);
-              reject(new Error(lastError.message));
-              return;
-            }
-            if (!response?.ok) {
-              reject(new Error(response?.error || "Unable to fetch media asset."));
-              return;
-            }
-            resolve(response);
-          }
-        );
+        chrome.runtime.sendMessage({ action: "fetchMediaAsset", url }, (response) => {
+          const lastError = getChromeLastError();
+          if (lastError) { markExtensionContextInvalidated(lastError); reject(new Error(lastError.message)); return; }
+          if (!response?.ok) { reject(new Error(response?.error || "Unable to fetch media asset.")); return; }
+          resolve(response);
+        });
       } catch (error) {
         markExtensionContextInvalidated(error);
         reject(error instanceof Error ? error : new Error("Media fetch failed."));
@@ -378,19 +403,11 @@ if (!window.__brainrotContentScriptLoaded) {
         reject(new Error("Extension was reloaded. Refresh this page before using capture."));
         return;
       }
-
       try {
         chrome.runtime.sendMessage({ action: "captureVisibleTab" }, (response) => {
           const lastError = getChromeLastError();
-          if (lastError) {
-            markExtensionContextInvalidated(lastError);
-            reject(new Error(lastError.message));
-            return;
-          }
-          if (!response?.ok) {
-            reject(new Error(response?.error || "Unable to capture screenshot."));
-            return;
-          }
+          if (lastError) { markExtensionContextInvalidated(lastError); reject(new Error(lastError.message)); return; }
+          if (!response?.ok) { reject(new Error(response?.error || "Unable to capture screenshot.")); return; }
           resolve(response.dataUrl);
         });
       } catch (error) {
@@ -402,97 +419,112 @@ if (!window.__brainrotContentScriptLoaded) {
 
   async function createHoverPayload(element) {
     const sourceUrl = getMediaUrl(element);
-    if (!sourceUrl) {
-      throw new Error("Media URL not found.");
-    }
-
+    if (!sourceUrl) throw new Error("Media URL not found.");
     const mediaType = getMediaType(sourceUrl);
     const fetched = await fetchMediaAsset(sourceUrl);
+    const ctx = getPageContext();
     const payload = {
-      image_base64: fetched.base64,
-      media_type: mediaType,
-      source_url: sourceUrl,
-      previewSrc: fetched.dataUrl || sourceUrl,
-      frame0_base64: null,
-      frame0_media_type: null
+      image_base64: fetched.base64, media_type: mediaType, source_url: sourceUrl,
+      previewSrc: fetched.dataUrl || sourceUrl, frame0_base64: null, frame0_media_type: null,
+      page_title: ctx.page_title, page_domain: ctx.page_domain
     };
-
     if (mediaType === "image/gif") {
       const firstFrame = await buildFirstFrameFromSource(sourceUrl);
       payload.frame0_base64 = firstFrame.base64;
       payload.frame0_media_type = firstFrame.mediaType;
       payload.previewSrc = firstFrame.dataUrl;
     }
-
     return payload;
   }
 
   async function createFilePayload(file) {
     const dataUrl = await fileToDataUrl(file);
+    const ctx = getPageContext();
     const payload = {
-      image_base64: dataUrlToBase64(dataUrl),
-      media_type: file.type || "image/jpeg",
-      source_url: null,
-      previewSrc: dataUrl,
-      frame0_base64: null,
-      frame0_media_type: null
+      image_base64: dataUrlToBase64(dataUrl), media_type: file.type || "image/jpeg",
+      source_url: null, previewSrc: dataUrl, frame0_base64: null, frame0_media_type: null,
+      page_title: ctx.page_title, page_domain: ctx.page_domain
     };
-
     if (payload.media_type === "image/gif") {
       const firstFrame = await buildFirstFrameFromSource(dataUrl);
       payload.frame0_base64 = firstFrame.base64;
       payload.frame0_media_type = firstFrame.mediaType;
       payload.previewSrc = firstFrame.dataUrl;
     }
-
     return payload;
   }
 
   async function analyzeMediaPayload(anchor, payload) {
     bubble.showLoadingState(anchor, "Analyzing screenshot or GIF...");
     const result = await postJson(MEDIA_ENDPOINT, {
-      image_base64: payload.image_base64,
-      media_type: payload.media_type,
-      source_url: payload.source_url,
-      frame0_base64: payload.frame0_base64,
-      frame0_media_type: payload.frame0_media_type
+      image_base64: payload.image_base64, media_type: payload.media_type,
+      source_url: payload.source_url, frame0_base64: payload.frame0_base64,
+      frame0_media_type: payload.frame0_media_type,
+      page_title: payload.page_title, page_domain: payload.page_domain
     });
-
-    if (!result.is_brainrot) {
-      bubble.hide();
-      return;
-    }
-
+    if (!result.is_brainrot) { bubble.hide(); return; }
     bubble.showImageAnalysisResult(anchor, result, payload.previewSrc);
+    // Phase 3: Save image analysis to history
+    saveToHistory({
+      type: "image",
+      original: payload.source_url || "Screenshot",
+      source_url: payload.source_url || "",
+      translation: result.brainrot_meaning || result.equivalent_text || "",
+      sentiment: "neutral",
+      confidence: result.confidence_score || 0
+    });
   }
 
+  /* ── Text analysis ───────────────────────────────────────────── */
   function getSelectionData() {
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) {
-      return null;
-    }
-
+    if (!selection || selection.rangeCount === 0) return null;
     const text = selection.toString().trim();
-    if (!text) {
-      return null;
-    }
-
+    if (!text) return null;
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
     return {
       selectedText: text,
       surroundingText: range.commonAncestorContainer?.textContent?.trim()?.slice(0, 280) || null,
+      nearestHeading: getNearestHeading(range),
       rect
     };
   }
 
   async function runSelectionAnalysis(selectionData) {
+    /* Phase 8: Check custom dictionary first */
+    const customMatch = lookupCustomDictionary(selectionData.selectedText);
+    if (customMatch) {
+      const fakeResult = {
+        is_brainrot: true,
+        brainrot_text: customMatch.term,
+        equivalent_text: customMatch.meaning,
+        formal_explanation: "Matched from your custom dictionary.",
+        sentiment_label: "neutral",
+        confidence_score: 1.0,
+        flagged_for_review: false,
+        model_used: "custom_dictionary"
+      };
+      bubble.showTextAnalysisResult(selectionData.rect, fakeResult, selectionData.selectedText, async () => {
+        await runSelectionRecheck(selectionData);
+      });
+      saveToHistory({
+        type: "text", original: selectionData.selectedText,
+        translation: customMatch.meaning, sentiment: "neutral", confidence: 1.0
+      });
+      return;
+    }
+
     bubble.showLoadingState(selectionData.rect, "Translating highlighted text...");
+    const ctx = getPageContext();
     try {
       const result = await postJson(TEXT_ENDPOINT, {
         selected_text: selectionData.selectedText,
-        page_url: window.location.href,
-        surrounding_text: selectionData.surroundingText
+        page_url: ctx.page_url,
+        surrounding_text: selectionData.surroundingText,
+        page_title: ctx.page_title,
+        page_domain: ctx.page_domain,
+        nearest_heading: selectionData.nearestHeading
       });
       if (!result.is_brainrot) {
         bubble.showInfo(
@@ -500,103 +532,75 @@ if (!window.__brainrotContentScriptLoaded) {
           "No Brainrot Detected",
           result.formal_explanation || "The selected text does not look like slang or meme-coded internet speech.",
           "Recheck",
-          async () => {
-            await runSelectionRecheck(selectionData);
-          }
+          async () => { await runSelectionRecheck(selectionData); }
         );
         return;
       }
-      bubble.showTextAnalysisResult(
-        selectionData.rect,
-        result,
-        selectionData.selectedText,
-        async () => {
-          await runSelectionRecheck(selectionData);
-        }
-      );
+      bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText, async () => {
+        await runSelectionRecheck(selectionData);
+      });
+      // Phase 3: Save to history
+      saveToHistory({
+        type: "text", original: selectionData.selectedText,
+        translation: result.equivalent_text || "", sentiment: result.sentiment_label || "unclear",
+        confidence: result.confidence_score || 0
+      });
     } catch (error) {
-      bubble.showError(
-        selectionData.rect,
-        error instanceof Error ? error.message : "Text analysis failed."
-      );
+      bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text analysis failed.");
     }
   }
 
   async function runSelectionRecheck(selectionData) {
     bubble.showLoadingState(selectionData.rect, "Rechecking highlighted text with DeepSeek...");
+    const ctx = getPageContext();
     try {
       const result = await postJson(RECHECK_TEXT_ENDPOINT, {
         selected_text: selectionData.selectedText,
-        page_url: window.location.href,
-        surrounding_text: selectionData.surroundingText
+        page_url: ctx.page_url,
+        surrounding_text: selectionData.surroundingText,
+        page_title: ctx.page_title,
+        page_domain: ctx.page_domain,
+        nearest_heading: selectionData.nearestHeading
       });
       if (!result.is_brainrot) {
-        const usedFallback =
-          String(result.model_used || "").includes("fallback") ||
-          result.confidence_score <= 0.35;
+        const usedFallback = String(result.model_used || "").includes("fallback") || result.confidence_score <= 0.35;
         bubble.showInfo(
           selectionData.rect,
           usedFallback ? "Recheck Unavailable" : "Recheck Complete",
           result.formal_explanation || result.equivalent_text || "DeepSeek did not classify the text as brainrot.",
           "Recheck Again",
-          async () => {
-            await runSelectionRecheck(selectionData);
-          }
+          async () => { await runSelectionRecheck(selectionData); }
         );
         return;
       }
-      bubble.showTextAnalysisResult(
-        selectionData.rect,
-        result,
-        selectionData.selectedText,
-        async () => {
-          await runSelectionRecheck(selectionData);
-        }
-      );
+      bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText, async () => {
+        await runSelectionRecheck(selectionData);
+      });
     } catch (error) {
-      bubble.showError(
-        selectionData.rect,
-        error instanceof Error ? error.message : "Text recheck failed."
-      );
+      bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text recheck failed.");
     }
   }
 
   function promptSelectionAnalysis(selectionData) {
-    const preview =
-      selectionData.selectedText.length > 96
-        ? `${selectionData.selectedText.slice(0, 93)}...`
-        : selectionData.selectedText;
-
+    const preview = selectionData.selectedText.length > 96
+      ? `${selectionData.selectedText.slice(0, 93)}...`
+      : selectionData.selectedText;
     bubble.showConfirmation(
-      selectionData.rect,
-      "Translate highlighted text?",
-      `"${preview}"`,
-      "Translate",
-      "Not now",
-      async () => {
-        await runSelectionAnalysis(selectionData);
-      },
-      () => {
-        bubble.hide();
-      }
+      selectionData.rect, "Translate highlighted text?", `"${preview}"`,
+      "Translate", "Not now",
+      async () => { await runSelectionAnalysis(selectionData); },
+      () => { bubble.hide(); }
     );
   }
 
-  async function analyzeSelection() {
-    if (!runtimeSettings.brainrotEnableTextSelection) {
-      return;
-    }
-
+  async function analyzeSelection(forceDirectTranslate) {
+    if (!runtimeSettings.brainrotEnableTextSelection && !forceDirectTranslate) return;
     const selectionData = getSelectionData();
-    if (!selectionData) {
-      return;
-    }
-
-    if (runtimeSettings.brainrotConfirmTextSelection) {
+    if (!selectionData) return;
+    if (!forceDirectTranslate && runtimeSettings.brainrotConfirmTextSelection) {
       promptSelectionAnalysis(selectionData);
       return;
     }
-
     await runSelectionAnalysis(selectionData);
   }
 
@@ -604,31 +608,22 @@ if (!window.__brainrotContentScriptLoaded) {
     bubble.showLoadingState(element, "Analyzing meme signal...");
     try {
       const payload = await createHoverPayload(element);
-      if (requestId !== hoverRequestId) {
-        return;
-      }
+      if (requestId !== hoverRequestId) return;
       await analyzeMediaPayload(element, payload);
     } catch (error) {
-      if (requestId !== hoverRequestId) {
-        return;
-      }
-      bubble.showError(
-        element,
-        error instanceof Error ? error.message : "Unexpected image analysis error."
-      );
+      if (requestId !== hoverRequestId) return;
+      bubble.showError(element, error instanceof Error ? error.message : "Unexpected image analysis error.");
     }
   }
-
 
   function cancelHoverAnalysis() {
     clearTimeout(hoverTimer);
     activeElement = null;
     hoverRequestId += 1;
-    if (bubble.isLoading()) {
-      bubble.hide();
-    }
+    if (bubble.isLoading()) bubble.hide();
   }
 
+  /* ── Launcher ────────────────────────────────────────────────── */
   function refreshLauncherState() {
     const dock = createLauncher();
     dock.style.display = runtimeSettings.brainrotEnableLauncher ? "block" : "none";
@@ -639,19 +634,12 @@ if (!window.__brainrotContentScriptLoaded) {
     const status = dock.querySelector("[data-brainrot-status]");
     if (status) {
       const activeModes = [];
-      if (runtimeSettings.brainrotEnableTextSelection) {
-        activeModes.push("text");
-      }
-      if (runtimeSettings.brainrotEnableHoverDetection) {
-        activeModes.push("hover");
-      }
-      if (runtimeSettings.brainrotEnableClipboardPaste) {
-        activeModes.push("paste");
-      }
-      status.textContent =
-        activeModes.length > 0
-          ? `Ready for ${activeModes.join(" + ")} analysis`
-          : "All frontend listeners are paused";
+      if (runtimeSettings.brainrotEnableTextSelection) activeModes.push("text");
+      if (runtimeSettings.brainrotEnableHoverDetection) activeModes.push("hover");
+      if (runtimeSettings.brainrotEnableClipboardPaste) activeModes.push("paste");
+      status.textContent = activeModes.length > 0
+        ? `Ready for ${activeModes.join(" + ")} analysis`
+        : "All frontend listeners are paused";
     }
 
     const hoverToggle = dock.querySelector("[data-brainrot-toggle-hover]");
@@ -678,88 +666,54 @@ if (!window.__brainrotContentScriptLoaded) {
 
   function clampLauncherPosition(top, dock) {
     const height = dock.offsetHeight || 120;
-    // Enforce 80px padding from top and bottom to avoid Chrome navigation and bottom bars
     return Math.min(Math.max(80, top), Math.max(80, window.innerHeight - height - 80));
   }
 
   function applyLauncherPosition(dock) {
     const height = dock.offsetHeight || 120;
     let topPos = Math.round(window.innerHeight / 2 - height / 2);
-
     const position = runtimeSettings.brainrotLauncherPosition;
-    if (position && Number.isFinite(position.top)) {
-      topPos = position.top;
-    }
-
+    if (position && Number.isFinite(position.top)) topPos = position.top;
     topPos = clampLauncherPosition(topPos, dock);
-
     dock.style.top = `${topPos}px`;
     dock.style.bottom = "auto";
     dock.style.left = "auto";
-
-    if (runtimeSettings.brainrotLauncherMinimized) {
-      dock.style.right = "0px";
-    } else {
-      dock.style.right = "18px";
-    }
+    dock.style.right = runtimeSettings.brainrotLauncherMinimized ? "0px" : "18px";
   }
 
   function makeLauncherDraggable(dock, handle) {
-    if (!(handle instanceof HTMLElement)) {
-      return;
-    }
-
+    if (!(handle instanceof HTMLElement)) return;
     let dragState = null;
 
     function finishDrag() {
-      if (!dragState) {
-        return;
-      }
-
+      if (!dragState) return;
       handle.classList.remove("is-dragging");
       const finalTop = clampLauncherPosition(dragState.top, dock);
-      dock.style.left = "auto";
-      dock.style.top = `${finalTop}px`;
-      dock.style.right = "18px";
-      dock.style.bottom = "auto";
+      dock.style.left = "auto"; dock.style.top = `${finalTop}px`;
+      dock.style.right = "18px"; dock.style.bottom = "auto";
       dragState = null;
       writeSettings({ brainrotLauncherPosition: { top: finalTop } }).catch(() => undefined);
     }
 
     handle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) {
-        return;
-      }
-      if (runtimeSettings.brainrotLauncherMinimized) {
-        return;
-      }
-
+      if (event.button !== 0) return;
+      if (runtimeSettings.brainrotLauncherMinimized) return;
       const rect = dock.getBoundingClientRect();
-      dragState = {
-        offsetY: event.clientY - rect.top,
-        top: rect.top
-      };
+      dragState = { offsetY: event.clientY - rect.top, top: rect.top };
       handle.classList.add("is-dragging");
-      dock.style.left = "auto";
-      dock.style.top = `${rect.top}px`;
-      dock.style.right = "18px";
-      dock.style.bottom = "auto";
+      dock.style.left = "auto"; dock.style.top = `${rect.top}px`;
+      dock.style.right = "18px"; dock.style.bottom = "auto";
       handle.setPointerCapture?.(event.pointerId);
       event.preventDefault();
     });
 
     handle.addEventListener("pointermove", (event) => {
-      if (!dragState) {
-        return;
-      }
-
+      if (!dragState) return;
       const nextTop = event.clientY - dragState.offsetY;
       const clampedTop = clampLauncherPosition(nextTop, dock);
       dragState.top = clampedTop;
-      dock.style.left = "auto";
-      dock.style.top = `${clampedTop}px`;
-      dock.style.right = "18px";
-      dock.style.bottom = "auto";
+      dock.style.left = "auto"; dock.style.top = `${clampedTop}px`;
+      dock.style.right = "18px"; dock.style.bottom = "auto";
     });
 
     handle.addEventListener("pointerup", finishDrag);
@@ -767,17 +721,12 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   async function adjustLauncherScale(direction) {
-    const nextScale = clampLauncherScale(
-      runtimeSettings.brainrotLauncherScale + direction * LAUNCHER_SCALE_STEP
-    );
+    const nextScale = clampLauncherScale(runtimeSettings.brainrotLauncherScale + direction * LAUNCHER_SCALE_STEP);
     await writeSettings({ brainrotLauncherScale: nextScale });
   }
 
   function createLauncher() {
-    if (launcher) {
-      return launcher;
-    }
-
+    if (launcher) return launcher;
     const dock = document.createElement("div");
     dock.id = "brainrot-floating-launcher";
     dock.innerHTML = `
@@ -807,7 +756,6 @@ if (!window.__brainrotContentScriptLoaded) {
       </div>
     `;
 
-
     const captureButton = dock.querySelector("[data-brainrot-capture]");
     const hoverToggle = dock.querySelector("[data-brainrot-toggle-hover]");
     const scaleDownButton = dock.querySelector("[data-brainrot-scale-down]");
@@ -819,40 +767,24 @@ if (!window.__brainrotContentScriptLoaded) {
     captureButton.addEventListener("click", async () => {
       try {
         const dataUrl = await captureVisibleTab();
+        const ctx = getPageContext();
         const payload = {
-          image_base64: dataUrlToBase64(dataUrl),
-          media_type: "image/png",
-          source_url: window.location.href,
-          frame0_base64: null,
-          frame0_media_type: null,
-          previewSrc: dataUrl
+          image_base64: dataUrlToBase64(dataUrl), media_type: "image/png",
+          source_url: window.location.href, frame0_base64: null, frame0_media_type: null,
+          previewSrc: dataUrl, page_title: ctx.page_title, page_domain: ctx.page_domain
         };
         await analyzeMediaPayload(dock, payload);
       } catch (error) {
-        bubble.showError(
-          dock,
-          error instanceof Error ? error.message : "Screenshot capture failed."
-        );
+        bubble.showError(dock, error instanceof Error ? error.message : "Screenshot capture failed.");
       }
     });
     hoverToggle.addEventListener("click", async () => {
-      await writeSettings({
-        brainrotEnableHoverDetection: !runtimeSettings.brainrotEnableHoverDetection
-      });
+      await writeSettings({ brainrotEnableHoverDetection: !runtimeSettings.brainrotEnableHoverDetection });
     });
-    scaleDownButton.addEventListener("click", async () => {
-      await adjustLauncherScale(-1);
-    });
-    scaleUpButton.addEventListener("click", async () => {
-      await adjustLauncherScale(1);
-    });
-    minimizeButton.addEventListener("click", async () => {
-      await writeSettings({ brainrotLauncherMinimized: true });
-    });
-    restoreBar.addEventListener("click", async () => {
-      await writeSettings({ brainrotLauncherMinimized: false });
-    });
-
+    scaleDownButton.addEventListener("click", async () => { await adjustLauncherScale(-1); });
+    scaleUpButton.addEventListener("click", async () => { await adjustLauncherScale(1); });
+    minimizeButton.addEventListener("click", async () => { await writeSettings({ brainrotLauncherMinimized: true }); });
+    restoreBar.addEventListener("click", async () => { await writeSettings({ brainrotLauncherMinimized: false }); });
 
     document.body.appendChild(dock);
     makeLauncherDraggable(dock, dragHandle);
@@ -861,84 +793,44 @@ if (!window.__brainrotContentScriptLoaded) {
     return dock;
   }
 
+  /* ── Event listeners ─────────────────────────────────────────── */
   document.addEventListener("mouseup", (event) => {
     const target = event.target;
-    if (
-      target instanceof Element &&
-      target.closest("#brainrot-pet-bubble, #brainrot-floating-launcher")
-    ) {
-      return;
-    }
-
-    window.setTimeout(() => {
-      analyzeSelection().catch(() => undefined);
-    }, 20);
+    if (target instanceof Element && target.closest("#brainrot-pet-bubble, #brainrot-floating-launcher")) return;
+    window.setTimeout(() => { analyzeSelection(false).catch(() => undefined); }, 20);
   });
 
-  let lastMouseX = 0;
-  let lastMouseY = 0;
-  let lastAnalyzedElement = null;
-  let lastMoveTime = 0;
-  let lastCheckedX = 0;
-  let lastCheckedY = 0;
+  let lastMouseX = 0, lastMouseY = 0, lastAnalyzedElement = null, lastMoveTime = 0, lastCheckedX = 0, lastCheckedY = 0;
 
   document.addEventListener("mousemove", (event) => {
-    if (!runtimeSettings.brainrotEnableHoverDetection) {
-      return;
-    }
-
+    if (!runtimeSettings.brainrotEnableHoverDetection) return;
     const now = Date.now();
     const deltaX = Math.abs(event.clientX - lastCheckedX);
     const deltaY = Math.abs(event.clientY - lastCheckedY);
-
-    // Throttle checks to 100ms and minimum 8px displacement
-    if (now - lastMoveTime < 100 && deltaX < 8 && deltaY < 8) {
-      return;
-    }
-    lastMoveTime = now;
-    lastCheckedX = event.clientX;
-    lastCheckedY = event.clientY;
-
-    lastMouseX = event.clientX;
-    lastMouseY = event.clientY;
+    if (now - lastMoveTime < 100 && deltaX < 8 && deltaY < 8) return;
+    lastMoveTime = now; lastCheckedX = event.clientX; lastCheckedY = event.clientY;
+    lastMouseX = event.clientX; lastMouseY = event.clientY;
 
     if (activeElement) {
       const elements = document.elementsFromPoint(lastMouseX, lastMouseY) || [];
       const overUI = elements.some(el => el.id === "brainrot-pet-bubble" || el.id === "brainrot-floating-launcher");
       const overActive = elements.includes(activeElement);
-      
-      if (!overUI && !overActive) {
-        cancelHoverAnalysis();
-      }
+      if (!overUI && !overActive) cancelHoverAnalysis();
     }
 
     clearTimeout(hoverTimer);
-    
     hoverTimer = window.setTimeout(() => {
       if (!runtimeSettings.brainrotEnableHoverDetection) return;
-
       const elements = document.elementsFromPoint(lastMouseX, lastMouseY) || [];
-      
       const overUI = elements.some(el => el.id === "brainrot-pet-bubble" || el.id === "brainrot-floating-launcher");
-      if (overUI) {
-        return;
-      }
+      if (overUI) return;
 
       let mediaElement = null;
       for (const el of elements) {
-        if (el.tagName === "IMG" || el.tagName === "VIDEO") {
-          mediaElement = el;
-          break;
-        }
-        if (el.hasAttribute("style") && el.getAttribute("style").includes("background-image")) {
-          mediaElement = el;
-          break;
-        }
+        if (el.tagName === "IMG" || el.tagName === "VIDEO") { mediaElement = el; break; }
+        if (el.hasAttribute("style") && el.getAttribute("style").includes("background-image")) { mediaElement = el; break; }
         const style = window.getComputedStyle(el);
-        if (style.backgroundImage && style.backgroundImage !== "none") {
-          mediaElement = el;
-          break;
-        }
+        if (style.backgroundImage && style.backgroundImage !== "none") { mediaElement = el; break; }
       }
 
       if (mediaElement) {
@@ -946,9 +838,7 @@ if (!window.__brainrotContentScriptLoaded) {
           lastAnalyzedElement = mediaElement;
           activeElement = mediaElement;
           const requestId = ++hoverRequestId;
-          if (isMemeCandidate(mediaElement)) {
-            analyzeElement(mediaElement, requestId);
-          }
+          if (isMemeCandidate(mediaElement)) analyzeElement(mediaElement, requestId);
         }
       } else {
         cancelHoverAnalysis();
@@ -957,37 +847,25 @@ if (!window.__brainrotContentScriptLoaded) {
   });
 
   document.addEventListener("paste", async (event) => {
-    if (!runtimeSettings.brainrotEnableClipboardPaste) {
-      return;
-    }
-
+    if (!runtimeSettings.brainrotEnableClipboardPaste) return;
     const items = Array.from(event.clipboardData?.items || []);
     const imageItem = items.find((item) => item.type.startsWith("image/"));
-    if (!imageItem) {
-      return;
-    }
+    if (!imageItem) return;
     const file = imageItem.getAsFile();
-    if (!file) {
-      return;
-    }
+    if (!file) return;
     try {
       const payload = await createFilePayload(file);
       await analyzeMediaPayload(createLauncher(), payload);
     } catch (error) {
-      bubble.showError(
-        createLauncher(),
-        error instanceof Error ? error.message : "Clipboard image analysis failed."
-      );
+      bubble.showError(createLauncher(), error instanceof Error ? error.message : "Clipboard image analysis failed.");
     }
   });
 
+  /* ── Storage sync ────────────────────────────────────────────── */
   if (hasLiveExtensionContext()) {
     try {
       chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName !== "local") {
-          return;
-        }
-
+        if (areaName !== "local") return;
         const updated = { ...runtimeSettings };
         let changed = false;
         for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -996,48 +874,72 @@ if (!window.__brainrotContentScriptLoaded) {
             changed = true;
           }
         }
-        if (!changed) {
-          return;
+        if (changed) {
+          runtimeSettings = normalizeSettings(updated);
+          refreshLauncherState();
         }
 
-        runtimeSettings = normalizeSettings(updated);
-        refreshLauncherState();
+        // Phase 8: Reload custom dictionary if it changed
+        if (changes.brainrotCustomDictionary) {
+          customDictionary = Array.isArray(changes.brainrotCustomDictionary.newValue)
+            ? changes.brainrotCustomDictionary.newValue : [];
+        }
       });
     } catch (error) {
       markExtensionContextInvalidated(error);
     }
   }
 
+  /* ── Initialization ──────────────────────────────────────────── */
   async function initialize() {
     runtimeSettings = await readSettings();
+    loadCustomDictionary();
     createLauncher();
     refreshLauncherState();
   }
 
+  /* ── Phase 6 & 7: Message handlers for context menu / keyboard ── */
   if (hasLiveExtensionContext()) {
     try {
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message?.action === "brainrotPing") {
           sendResponse({
-            ok: true,
-            href: window.location.href,
-            launcherVisible: Boolean(
-              launcher &&
-              launcher.isConnected &&
-              launcher.style.display !== "none"
-            ),
+            ok: true, href: window.location.href,
+            launcherVisible: Boolean(launcher && launcher.isConnected && launcher.style.display !== "none"),
             settings: runtimeSettings
           });
           return false;
         }
 
         if (message?.action === "brainrotShowTestBubble") {
-          bubble.showTimedInfo(
-            getDebugAnchor(),
-            "Page Connection Ready",
-            "The content script is injected on this page.",
-            3
-          );
+          bubble.showTimedInfo(getDebugAnchor(), "Page Connection Ready", "The content script is injected on this page.", 3);
+          sendResponse({ ok: true });
+          return false;
+        }
+
+        // Phase 6: Context menu translate
+        if (message?.action === "brainrotContextMenuTranslate") {
+          const selectionData = getSelectionData();
+          if (selectionData) {
+            runSelectionAnalysis(selectionData).catch(() => undefined);
+          } else if (message.text) {
+            // Fallback: use the text from the context menu info
+            const fakeRect = new DOMRect(window.innerWidth / 2, window.innerHeight / 3, 1, 1);
+            const fakeData = {
+              selectedText: message.text,
+              surroundingText: null,
+              nearestHeading: null,
+              rect: fakeRect
+            };
+            runSelectionAnalysis(fakeData).catch(() => undefined);
+          }
+          sendResponse({ ok: true });
+          return false;
+        }
+
+        // Phase 7: Keyboard shortcut translate (skip confirmation)
+        if (message?.action === "brainrotKeyboardTranslate") {
+          analyzeSelection(true).catch(() => undefined);
           sendResponse({ ok: true });
           return false;
         }
@@ -1050,13 +952,7 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener(
-      "DOMContentLoaded",
-      () => {
-        initialize().catch(() => undefined);
-      },
-      { once: true }
-    );
+    document.addEventListener("DOMContentLoaded", () => { initialize().catch(() => undefined); }, { once: true });
   } else {
     initialize().catch(() => undefined);
   }

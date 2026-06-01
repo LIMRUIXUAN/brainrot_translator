@@ -41,6 +41,9 @@ class HighlightedTextAnalysisRequest(BaseModel):
     selected_text: str = Field(..., min_length=1)
     page_url: Optional[str] = None
     surrounding_text: Optional[str] = None
+    page_title: Optional[str] = None
+    page_domain: Optional[str] = None
+    nearest_heading: Optional[str] = None
 
     @field_validator("selected_text")
     @classmethod
@@ -50,7 +53,7 @@ class HighlightedTextAnalysisRequest(BaseModel):
             raise ValueError("selected_text cannot be empty")
         return cleaned
 
-    @field_validator("page_url", "surrounding_text")
+    @field_validator("page_url", "surrounding_text", "page_title", "page_domain", "nearest_heading")
     @classmethod
     def validate_optional_text(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -103,6 +106,8 @@ class ScreenshotMediaRequest(BaseModel):
     source_url: Optional[str] = None
     frame0_base64: Optional[str] = None
     frame0_media_type: Optional[str] = None
+    page_title: Optional[str] = None
+    page_domain: Optional[str] = None
 
     @field_validator("image_base64")
     @classmethod
@@ -192,3 +197,13 @@ class DashboardWordFrequencyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[WordFrequencyItem]
+
+
+class DashboardStatsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total_text_analyses: int = 0
+    total_image_analyses: int = 0
+    unique_terms: int = 0
+    top_term: Optional[str] = None
+    top_term_count: int = 0

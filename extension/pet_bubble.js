@@ -152,6 +152,17 @@ if (!window.__brainrotPetBubbleLoaded) {
       return this.state === "loading";
     }
 
+    _sentimentColor(label) {
+      const map = {
+        positive: "#22c55e",
+        negative: "#ef4444",
+        neutral: "#a3a3a3",
+        mixed: "#f59e0b",
+        unclear: "#6b7280"
+      };
+      return map[(label || "").toLowerCase()] || map.unclear;
+    }
+
     showLoadingState(anchor, message = "Analyzing...") {
       this.render(
         anchor,
@@ -276,14 +287,16 @@ if (!window.__brainrotPetBubbleLoaded) {
       this.bindDecisionButtons(onConfirm, onCancel);
     }
 
+    /* ── Phase 2: Redesigned rich text result ────────────────────────── */
     showTextAnalysisResult(anchor, result, originalText, onRecheck) {
       const confidence = Math.round((result.confidence_score || 0) * 100);
       const equivalent = result.equivalent_text || originalText;
       const explanation = result.formal_explanation || "No expanded explanation was returned.";
       const sentiment = result.sentiment_label || "unclear";
+      const sentimentColor = this._sentimentColor(sentiment);
       const chips = [
         `<div class="brainrot-bubble-chip">Confidence ${confidence}%</div>`,
-        `<div class="brainrot-bubble-chip">Sentiment ${this.escapeHtml(sentiment)}</div>`
+        `<div class="brainrot-bubble-chip" style="border-color:${sentimentColor};color:${sentimentColor}">● ${this.escapeHtml(sentiment)}</div>`
       ];
       if (result.flagged_for_review) {
         chips.push(`<div class="brainrot-bubble-chip brainrot-bubble-chip--warn">Queued for review</div>`);
@@ -294,11 +307,11 @@ if (!window.__brainrotPetBubbleLoaded) {
         `
         <div class="brainrot-bubble-shell">
           <div class="brainrot-bubble-kicker">Highlighted Text</div>
-          <div class="brainrot-bubble-heading">Formal translation</div>
-          <div class="brainrot-bubble-copy">"${this.escapeHtml(originalText)}"</div>
-          <div class="brainrot-bubble-block">
-            <div class="brainrot-bubble-label">Equivalent Text</div>
-            <div class="brainrot-bubble-value brainrot-bubble-value--formal">"${this.escapeHtml(equivalent)}"</div>
+          <div class="brainrot-bubble-heading">Brainrot Translation</div>
+          <div class="brainrot-bubble-translation-card">
+            <div class="brainrot-bubble-original">"${this.escapeHtml(originalText)}"</div>
+            <div class="brainrot-bubble-arrow">⟶</div>
+            <div class="brainrot-bubble-translated">"${this.escapeHtml(equivalent)}"</div>
           </div>
           <details class="brainrot-bubble-details">
             <summary class="brainrot-bubble-summary">Explain Context</summary>
@@ -310,7 +323,8 @@ if (!window.__brainrotPetBubbleLoaded) {
             ${chips.join("")}
           </div>
           <div class="brainrot-bubble-actions">
-            <button class="brainrot-bubble-button brainrot-bubble-button--copy" data-brainrot-copy>Copy Translation</button>
+            <button class="brainrot-bubble-button brainrot-bubble-button--copy" data-brainrot-copy-original title="Copy original text">Copy Original</button>
+            <button class="brainrot-bubble-button brainrot-bubble-button--copy" data-brainrot-copy title="Copy translation">Copy Translation</button>
             <button class="brainrot-bubble-button brainrot-bubble-button--copy" data-brainrot-recheck>Recheck</button>
             <button class="brainrot-bubble-button brainrot-bubble-button--close" data-brainrot-close>Close</button>
           </div>
@@ -320,9 +334,11 @@ if (!window.__brainrotPetBubbleLoaded) {
       );
       this.bindCloseButton();
       this.bindCopyButton(equivalent);
+      this.bindCopyOriginalButton(originalText);
       this.bindRecheckButton(onRecheck);
     }
 
+    /* ── Phase 2: Redesigned rich image result ───────────────────────── */
     showImageAnalysisResult(anchor, result, previewSrc) {
       const confidence = Math.round((result.confidence_score || 0) * 100);
       const meaning = result.brainrot_meaning || "Unclear";
@@ -393,7 +409,27 @@ if (!window.__brainrotPetBubbleLoaded) {
         async () => {
           try {
             await navigator.clipboard.writeText(text);
-            button.textContent = "Copied";
+            button.textContent = "Copied ✓";
+          } catch (error) {
+            button.textContent = "Copy failed";
+          }
+        },
+        { once: true }
+      );
+    }
+
+    bindCopyOriginalButton(text) {
+      const button = this.container?.querySelector("[data-brainrot-copy-original]");
+      if (!button) {
+        return;
+      }
+
+      button.addEventListener(
+        "click",
+        async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+            button.textContent = "Copied ✓";
           } catch (error) {
             button.textContent = "Copy failed";
           }

@@ -169,13 +169,81 @@
     <section class="panel">
       <div class="panel-heading">
         <div>
-          <p class="panel-kicker">Dashboard</p>
-          <h2>Brainrot Frequency</h2>
+          <p class="panel-kicker">Analytics</p>
+          <h2>Dashboard</h2>
         </div>
-        <button id="refreshFrequencyButton" class="ghost-button" type="button">Refresh</button>
+        <button id="refreshStatsButton" class="ghost-button" type="button">Refresh</button>
       </div>
-      <div id="frequencyStatus" class="frequency-status" aria-live="polite">No dashboard check yet.</div>
-      <ol id="frequencyList" class="frequency-list"></ol>
+
+      <div class="dashboard-stats-grid">
+        <div class="stat-card">
+          <span class="stat-num" id="statTotalText">0</span>
+          <span class="stat-label">Text Analyses</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-num" id="statTotalImage">0</span>
+          <span class="stat-label">Image Analyses</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-num" id="statUniqueTerms">0</span>
+          <span class="stat-label">Unique Slangs</span>
+        </div>
+      </div>
+
+      <div class="stat-top-term-banner" id="statTopTermBanner" style="display: none; margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.22); font-size: 13px; text-align: center; color: #fcd34d;">
+        Top Term: <strong id="statTopTermName" style="color: #fff;">-</strong> (<span id="statTopTermCount">0</span> times)
+      </div>
+
+      <div class="panel-sub-heading" style="margin-top: 16px; margin-bottom: 8px;">
+        <h3 style="margin: 0; font-size: 14px; color: #93c5fd; text-transform: uppercase; letter-spacing: 0.05em;">Top Slang Frequency</h3>
+      </div>
+      
+      <div id="frequencyStatus" class="frequency-status" aria-live="polite" style="font-size: 12px; color: #94a3b8;">Click refresh to load stats.</div>
+      <div id="barChartContainer" class="bar-chart-container" style="margin-top: 10px; display: grid; gap: 8px;"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="panel-kicker">History</p>
+          <h2>Translation Log</h2>
+        </div>
+        <button id="clearHistoryButton" class="ghost-button" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.2); background: rgba(239, 68, 68, 0.08);" type="button">Clear</button>
+      </div>
+
+      <div class="history-controls" style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <button id="exportJsonButton" class="ghost-button" style="flex: 1; padding: 8px 10px; font-size: 12px;" type="button">Export JSON</button>
+        <button id="exportCsvButton" class="ghost-button" style="flex: 1; padding: 8px 10px; font-size: 12px;" type="button">Export CSV</button>
+      </div>
+
+      <div id="historyListContainer" class="history-list-container" style="max-height: 280px; overflow-y: auto; display: grid; gap: 8px; padding-right: 2px;">
+        <p class="history-empty" style="text-align: center; color: #94a3b8; font-size: 13px; margin: 12px 0;">No history entries found.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="panel-kicker">Glossary</p>
+          <h2>Custom Dictionary</h2>
+        </div>
+      </div>
+
+      <form id="dictionaryForm" style="display: grid; gap: 10px; margin-bottom: 14px;">
+        <label class="field">
+          <span>Slang Term</span>
+          <input id="dictTermInput" type="text" placeholder="e.g. rizzler" required style="padding: 10px 12px; font-size: 13px;" />
+        </label>
+        <label class="field">
+          <span>Meaning / Translation</span>
+          <input id="dictMeaningInput" type="text" placeholder="e.g. someone with great charisma" required style="padding: 10px 12px; font-size: 13px;" />
+        </label>
+        <button type="submit" class="primary-button" style="width: 100%; min-height: 38px; padding: 8px 14px; font-size: 13px; margin-top: 4px;">Add Term</button>
+      </form>
+
+      <div id="dictionaryListContainer" style="max-height: 220px; overflow-y: auto;">
+        <ul id="dictionaryList" style="list-style: none; padding: 0; margin: 0; display: grid; gap: 8px;"></ul>
+      </div>
     </section>
   </main>
 

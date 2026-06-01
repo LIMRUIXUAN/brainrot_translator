@@ -170,16 +170,23 @@ class BrainrotAgent:
         selected_text: str,
         page_url: Optional[str],
         surrounding_text: Optional[str],
+        page_title: Optional[str] = None,
+        page_domain: Optional[str] = None,
+        nearest_heading: Optional[str] = None,
     ) -> str:
         page_hint = page_url or "unavailable"
-        domain_hint = urlparse(page_url).netloc if page_url else "unavailable"
+        domain_hint = page_domain or (urlparse(page_url).netloc if page_url else "unavailable")
         surrounding = surrounding_text or "unavailable"
+        title_hint = page_title or "unavailable"
+        heading_hint = nearest_heading or "unavailable"
         return (
             f'Analyze the entire highlighted text selection: "{selected_text}"\n'
             "1. Translate the COMPLETE sentence context smoothly into formal English.\n"
             "2. Identify any core brainrot/slang elements and provide a sharp, concise explanation of its cultural context and exact internet stance.\n"
+            f"Page Title: {title_hint}\n"
             f"Page Host/Platform: {domain_hint}\n"
             f"Page URL hint: {page_hint}\n"
+            f"Nearest heading context: {heading_hint}\n"
             f"Surrounding context: {surrounding}\n"
             "Estimate sentiment from the complete message, not from one isolated term.\n"
             f"{self.build_reference_block(selected_text)}"
@@ -202,9 +209,17 @@ class BrainrotAgent:
             "Return JSON only and follow the schema exactly."
         )
 
-    def _build_image_user_prompt(self, *, source_url: Optional[str], using_frame: bool) -> str:
+    def _build_image_user_prompt(
+        self,
+        *,
+        source_url: Optional[str],
+        using_frame: bool,
+        page_title: Optional[str] = None,
+        page_domain: Optional[str] = None,
+    ) -> str:
         source_line = f"Source URL hint: {source_url}" if source_url else "Source URL hint: unavailable"
-        domain_hint = urlparse(source_url).netloc if source_url else "unavailable"
+        domain_hint = page_domain or (urlparse(source_url).netloc if source_url else "unavailable")
+        title_hint = page_title or "unavailable"
         frame_line = (
             "The attached image is a first-frame fallback extracted from a GIF."
             if using_frame
@@ -214,6 +229,7 @@ class BrainrotAgent:
             "Analyze the attached screenshot/media asset.\n"
             "1. Deconstruct the entire overarching message and translate it into a direct formal English sentence.\n"
             "2. Provide a brief, punchy explanation focusing on the core point of the brainrot meme meaning, ignoring unnecessary academic filler.\n"
+            f"Page Title: {title_hint}\n"
             f"Page Host/Platform: {domain_hint}\n"
             f"{source_line}\n"
             f"{frame_line}\n"
@@ -297,6 +313,9 @@ class BrainrotAgent:
         selected_text: str,
         page_url: Optional[str] = None,
         surrounding_text: Optional[str] = None,
+        page_title: Optional[str] = None,
+        page_domain: Optional[str] = None,
+        nearest_heading: Optional[str] = None,
     ) -> HighlightedTextAnalysisResponse:
         payload = {
             "model": self.settings.openrouter_text_model,
@@ -308,6 +327,9 @@ class BrainrotAgent:
                         selected_text=selected_text,
                         page_url=page_url,
                         surrounding_text=surrounding_text,
+                        page_title=page_title,
+                        page_domain=page_domain,
+                        nearest_heading=nearest_heading,
                     ),
                 },
             ],
@@ -343,6 +365,8 @@ class BrainrotAgent:
         media_type: str,
         source_url: Optional[str],
         using_frame: bool,
+        page_title: Optional[str] = None,
+        page_domain: Optional[str] = None,
         timeout_seconds: float = 12.0,
     ) -> ImageAnalysisResponse:
         data_url = (
@@ -362,6 +386,8 @@ class BrainrotAgent:
                             "text": self._build_image_user_prompt(
                                 source_url=source_url,
                                 using_frame=using_frame,
+                                page_title=page_title,
+                                page_domain=page_domain,
                             ),
                         },
                         {
@@ -397,6 +423,8 @@ class BrainrotAgent:
         source_url: Optional[str] = None,
         frame0_base64: Optional[str] = None,
         frame0_media_type: Optional[str] = None,
+        page_title: Optional[str] = None,
+        page_domain: Optional[str] = None,
     ) -> ImageAnalysisResponse:
         try:
             return await self._call_image_model(
@@ -405,6 +433,8 @@ class BrainrotAgent:
                 media_type=media_type,
                 source_url=source_url,
                 using_frame=False,
+                page_title=page_title,
+                page_domain=page_domain,
             )
         except httpx.TimeoutException:
             return ImageAnalysisResponse.safe_fallback(
@@ -425,6 +455,8 @@ class BrainrotAgent:
                         media_type=frame0_media_type,
                         source_url=source_url,
                         using_frame=True,
+                        page_title=page_title,
+                        page_domain=page_domain,
                     )
                 except httpx.TimeoutException:
                     return ImageAnalysisResponse.safe_fallback(

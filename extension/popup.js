@@ -180,68 +180,321 @@
       .replace(/'/g, "&#39;");
   }
 
+  function normalizeHistoryText(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  function truncateHistoryText(value, maxLength) {
+    const text = normalizeHistoryText(value);
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+  }
+
+  function summarizeHistoryOriginal(entry, isImage) {
+    const sourceUrl = normalizeHistoryText(entry?.source_url || "");
+    const original = normalizeHistoryText(entry?.original || "");
+    const displaySource = sourceUrl || original;
+    if (!isImage) return truncateHistoryText(original, 90);
+    if (!displaySource || displaySource === "Screenshot") return "Screenshot / captured image";
+    if (displaySource.startsWith("data:")) return "Captured or pasted image data";
+
+    try {
+      const url = new URL(displaySource);
+      const path = url.pathname && url.pathname !== "/" ? url.pathname : "";
+      return `Image: ${truncateHistoryText(`${url.hostname}${path}`, 83)}`;
+    } catch {
+      return `Image: ${truncateHistoryText(displaySource, 83)}`;
+    }
+  }
+
   function setFrequencyStatus(message, tone) {
-    if (!elements.frequencyStatus) {
-      return;
-    }
-    elements.frequencyStatus.textContent = message;
-    elements.frequencyStatus.className = "frequency-status";
+    const statusEl = document.getElementById("frequencyStatus");
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.className = "frequency-status";
     if (tone) {
-      elements.frequencyStatus.classList.add(`is-${tone}`);
+      statusEl.classList.add(`is-${tone}`);
     }
   }
 
-  function renderFrequencyItems(items) {
-    if (!elements.frequencyList) {
-      return;
-    }
+  function renderFrequencyBarChart(items) {
+    const container = document.getElementById("barChartContainer");
+    if (!container) return;
+
     if (!Array.isArray(items) || items.length === 0) {
-      elements.frequencyList.innerHTML = "";
-      setFrequencyStatus("No highlighted text terms have been recorded yet.", null);
+      container.innerHTML = `<p style="text-align: center; color: #94a3b8; font-size: 13px; margin: 12px 0;">No slang terms recorded yet.</p>`;
+      setFrequencyStatus("No terms logged.", null);
       return;
     }
-    elements.frequencyList.innerHTML = items
-      .map((item) => {
-        const term = escapeHtml(item.term || "Unknown");
-        const count = Number.isFinite(Number(item.count)) ? Number(item.count) : 0;
-        return `
-          <li class="frequency-item">
-            <span class="frequency-term">${term}</span>
-            <span class="frequency-count">${count}</span>
-          </li>
-        `;
-      })
-      .join("");
-    setFrequencyStatus(`Showing top ${items.length} recorded terms.`, null);
+
+    const maxCount = Math.max(...items.map(item => Number(item.count) || 1));
+    
+    container.innerHTML = items.map(item => {
+      const term = escapeHtml(item.term || "Unknown");
+      const count = Number(item.count) || 0;
+      const percentage = Math.max(5, Math.round((count / maxCount) * 100));
+
+      return `
+        <div class="bar-chart-row">
+          <span class="bar-chart-label" title="${term}">${term}</span>
+          <div class="bar-chart-bar-outer">
+            <div class="bar-chart-bar-inner" style="width: ${percentage}%"></div>
+          </div>
+          <span class="bar-chart-count">${count}</span>
+        </div>
+      `;
+    }).join("");
+
+    setFrequencyStatus(`Showing top ${items.length} slang terms.`, null);
   }
 
-  function renderFrequencyError(message) {
-    if (elements.frequencyList) {
-      elements.frequencyList.innerHTML = "";
+  async function refreshDashboardStats(baseUrl) {
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/dashboard/stats`, { method: "GET" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || payload.error || "Failed to fetch dashboard stats.");
+
+      const totalTextEl = document.getElementById("statTotalText");
+      const totalImageEl = document.getElementById("statTotalImage");
+      const uniqueTermsEl = document.getElementById("statUniqueTerms");
+
+      if (totalTextEl) totalTextEl.textContent = payload.total_text_analyses ?? 0;
+      if (totalImageEl) totalImageEl.textContent = payload.total_image_analyses ?? 0;
+      if (uniqueTermsEl) uniqueTermsEl.textContent = payload.unique_terms ?? 0;
+
+      const banner = document.getElementById("statTopTermBanner");
+      if (banner) {
+        if (payload.top_term) {
+          const nameEl = document.getElementById("statTopTermName");
+          const countEl = document.getElementById("statTopTermCount");
+          if (nameEl) nameEl.textContent = payload.top_term;
+          if (countEl) countEl.textContent = payload.top_term_count ?? 0;
+          banner.style.display = "block";
+        } else {
+          banner.style.display = "none";
+        }
+      }
+    } catch (error) {
+      const totalTextEl = document.getElementById("statTotalText");
+      const totalImageEl = document.getElementById("statTotalImage");
+      const uniqueTermsEl = document.getElementById("statUniqueTerms");
+
+      if (totalTextEl) totalTextEl.textContent = "-";
+      if (totalImageEl) totalImageEl.textContent = "-";
+      if (uniqueTermsEl) uniqueTermsEl.textContent = "-";
+      const banner = document.getElementById("statTopTermBanner");
+      if (banner) banner.style.display = "none";
     }
-    setFrequencyStatus(message, "error");
   }
 
   async function refreshFrequency(baseUrl) {
-    if (!elements.frequencyList || !elements.frequencyStatus) {
-      return;
-    }
-    setFrequencyStatus("Loading frequency dashboard...", null);
+    setFrequencyStatus("Refreshing dashboard...", null);
+    await refreshDashboardStats(baseUrl);
+
     try {
-      const response = await fetch(`${baseUrl}/api/v1/dashboard/word-frequency?limit=20`, {
+      const response = await fetch(`${baseUrl}/api/v1/dashboard/word-frequency?limit=10`, {
         method: "GET"
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(payload.detail || payload.error || "Dashboard request failed.");
       }
-      renderFrequencyItems(payload.items || []);
+      renderFrequencyBarChart(payload.items || []);
     } catch (error) {
-      renderFrequencyError(
-        error instanceof Error ? error.message : "Unable to load the frequency dashboard."
-      );
+      const container = document.getElementById("barChartContainer");
+      if (container) {
+        container.innerHTML = "";
+      }
+      setFrequencyStatus(error instanceof Error ? error.message : "Unable to load dashboard data.", "error");
     }
   }
+
+  /* ── Phase 3: Translation History Manager ───────────────────── */
+  async function renderHistory() {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotHistory: [] }, resolve);
+    });
+    const history = Array.isArray(result.brainrotHistory) ? result.brainrotHistory : [];
+    const container = document.getElementById("historyListContainer");
+    if (!container) return;
+
+    if (history.length === 0) {
+      container.innerHTML = `<p class="history-empty" style="text-align: center; color: #94a3b8; font-size: 13px; margin: 12px 0;">No history entries found.</p>`;
+      return;
+    }
+
+    container.innerHTML = history.map((entry) => {
+      const isImage = entry.type === "image";
+      const date = entry.timestamp ? new Date(entry.timestamp) : new Date();
+      const dateStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const fullOriginal = normalizeHistoryText(entry.original || "");
+      const fullSourceUrl = normalizeHistoryText(entry.source_url || "");
+      const fullTranslation = normalizeHistoryText(entry.translation || "");
+      const original = escapeHtml(summarizeHistoryOriginal(entry, isImage));
+      const translation = escapeHtml(truncateHistoryText(fullTranslation, 160));
+      const sentiment = escapeHtml(entry.sentiment || "unclear");
+      const confidence = Math.round((entry.confidence || 0) * 100);
+      const originalTitle = escapeHtml(isImage && fullSourceUrl ? fullSourceUrl : fullOriginal);
+      const translationTitle = escapeHtml(fullTranslation);
+      
+      const badgeClass = isImage ? "history-type-badge is-image" : "history-type-badge";
+      const typeLabel = isImage ? "Image" : "Text";
+
+      return `
+        <div class="history-entry">
+          <div class="history-header">
+            <span class="history-time">${dateStr}</span>
+            <span class="${badgeClass}">${typeLabel}</span>
+          </div>
+          <div class="history-content">
+            <div class="history-original" title="${originalTitle}">"${original}"</div>
+            <div class="history-arrow">⟶</div>
+            <div class="history-translation" title="${translationTitle}">${translation}</div>
+          </div>
+          <div class="history-meta">
+            <span class="history-chip">Sentiment: ${sentiment}</span>
+            <span class="history-chip">Confidence: ${confidence}%</span>
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  async function clearHistory() {
+    if (!confirm("Are you sure you want to clear your translation log history?")) {
+      return;
+    }
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ brainrotHistory: [] }, resolve);
+    });
+    await renderHistory();
+  }
+
+  /* ── Phase 9: Export & Share ────────────────────────────────── */
+  function triggerDownload(content, filename, contentType) {
+    const blob = new Blob([content], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportHistoryJson() {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotHistory: [] }, resolve);
+    });
+    const history = Array.isArray(result.brainrotHistory) ? result.brainrotHistory : [];
+    if (history.length === 0) {
+      alert("No history entries to export.");
+      return;
+    }
+    const jsonStr = JSON.stringify(history, null, 2);
+    triggerDownload(jsonStr, "brainrot_history.json", "application/json");
+  }
+
+  async function exportHistoryCsv() {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotHistory: [] }, resolve);
+    });
+    const history = Array.isArray(result.brainrotHistory) ? result.brainrotHistory : [];
+    if (history.length === 0) {
+      alert("No history entries to export.");
+      return;
+    }
+    const headers = ["Timestamp", "Type", "Original", "Source URL", "Translation", "Sentiment", "Confidence", "Page URL", "Page Title"];
+    const rows = history.map(entry => [
+      entry.timestamp || "",
+      entry.type || "text",
+      entry.original || "",
+      entry.source_url || "",
+      entry.translation || "",
+      entry.sentiment || "unclear",
+      entry.confidence || 0,
+      entry.page_url || "",
+      entry.page_title || ""
+    ]);
+    const csvContent = [headers, ...rows]
+      .map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    triggerDownload(csvContent, "brainrot_history.csv", "text/csv");
+  }
+
+  /* ── Phase 8: Custom dictionary / User glossary ────────────── */
+  async function renderDictionary() {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotCustomDictionary: [] }, resolve);
+    });
+    const list = Array.isArray(result.brainrotCustomDictionary) ? result.brainrotCustomDictionary : [];
+    const container = document.getElementById("dictionaryList");
+    if (!container) return;
+
+    if (list.length === 0) {
+      container.innerHTML = `<li style="text-align: center; color: #94a3b8; font-size: 12px; padding: 12px 0;">No custom slang terms added yet.</li>`;
+      return;
+    }
+
+    container.innerHTML = list.map((item, idx) => {
+      const term = escapeHtml(item.term || "");
+      const meaning = escapeHtml(item.meaning || "");
+      return `
+        <li class="dictionary-item" data-index="${idx}">
+          <div class="dictionary-info">
+            <div class="dictionary-term">${term}</div>
+            <div class="dictionary-meaning">${meaning}</div>
+          </div>
+          <button type="button" class="dictionary-delete-btn" data-action="delete" title="Delete term">×</button>
+        </li>
+      `;
+    }).join("");
+
+    // Bind delete events
+    container.querySelectorAll(".dictionary-delete-btn").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        const itemEl = e.target.closest(".dictionary-item");
+        if (!itemEl) return;
+        const index = parseInt(itemEl.dataset.index, 10);
+        await deleteDictionaryItem(index);
+      });
+    });
+  }
+
+  async function deleteDictionaryItem(index) {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotCustomDictionary: [] }, resolve);
+    });
+    const list = Array.isArray(result.brainrotCustomDictionary) ? result.brainrotCustomDictionary : [];
+    list.splice(index, 1);
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ brainrotCustomDictionary: list }, resolve);
+    });
+    await renderDictionary();
+  }
+
+  async function addDictionaryItem(term, meaning) {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotCustomDictionary: [] }, resolve);
+    });
+    const list = Array.isArray(result.brainrotCustomDictionary) ? result.brainrotCustomDictionary : [];
+    
+    // Check for duplicate
+    const lowered = term.trim().toLowerCase();
+    const duplicateIdx = list.findIndex(item => item.term.toLowerCase() === lowered);
+    if (duplicateIdx >= 0) {
+      list[duplicateIdx].meaning = meaning.trim();
+    } else {
+      list.push({ term: term.trim(), meaning: meaning.trim() });
+    }
+
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ brainrotCustomDictionary: list }, resolve);
+    });
+    await renderDictionary();
+  }
+
 
   function renderHealthError(baseUrl, message) {
     setHealthCard(
@@ -514,13 +767,24 @@
     elements.pageStatusHint = document.getElementById("pageStatusHint");
     elements.checkPageButton = document.getElementById("checkPageButton");
     elements.showTestBubbleButton = document.getElementById("showTestBubbleButton");
-    elements.refreshFrequencyButton = document.getElementById("refreshFrequencyButton");
+    elements.refreshFrequencyButton = document.getElementById("refreshStatsButton");
     elements.frequencyStatus = document.getElementById("frequencyStatus");
-    elements.frequencyList = document.getElementById("frequencyList");
+    
+    elements.clearHistoryButton = document.getElementById("clearHistoryButton");
+    elements.exportJsonButton = document.getElementById("exportJsonButton");
+    elements.exportCsvButton = document.getElementById("exportCsvButton");
+    elements.dictionaryForm = document.getElementById("dictionaryForm");
+    elements.dictTermInput = document.getElementById("dictTermInput");
+    elements.dictMeaningInput = document.getElementById("dictMeaningInput");
 
     const currentSettings = await getStoredSettings();
     renderSettings(currentSettings);
     await refreshHealth(currentSettings.brainrotApiBaseUrl);
+    
+    // Render History & Dictionary
+    await renderHistory();
+    await renderDictionary();
+
     if (elements.pageStatusCard) {
       await checkActivePage();
     }
@@ -562,6 +826,28 @@
       });
     });
 
+    elements.clearHistoryButton?.addEventListener("click", () => {
+      clearHistory().catch(() => undefined);
+    });
+    elements.exportJsonButton?.addEventListener("click", () => {
+      exportHistoryJson().catch(() => undefined);
+    });
+    elements.exportCsvButton?.addEventListener("click", () => {
+      exportHistoryCsv().catch(() => undefined);
+    });
+    
+    elements.dictionaryForm?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const term = elements.dictTermInput.value;
+      const meaning = elements.dictMeaningInput.value;
+      if (term && meaning) {
+        addDictionaryItem(term, meaning).then(() => {
+          elements.dictTermInput.value = "";
+          elements.dictMeaningInput.value = "";
+        }).catch(() => undefined);
+      }
+    });
+
     [
       elements.enableTextSelection,
       elements.confirmTextSelection,
@@ -584,6 +870,7 @@
         return;
       }
 
+      // Check settings changes
       const updated = {};
       let hasSettingsChange = false;
       for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -593,18 +880,24 @@
         }
       }
 
-      if (!hasSettingsChange) {
-        return;
+      if (hasSettingsChange) {
+        getStoredSettings()
+          .then((storedSettings) => {
+            renderSettings({
+              ...storedSettings,
+              ...updated
+            });
+          })
+          .catch(() => undefined);
       }
 
-      getStoredSettings()
-        .then((storedSettings) => {
-          renderSettings({
-            ...storedSettings,
-            ...updated
-          });
-        })
-        .catch(() => undefined);
+      // Live updates to History & Dictionary views if they change under us
+      if (changes.brainrotHistory) {
+        renderHistory().catch(() => undefined);
+      }
+      if (changes.brainrotCustomDictionary) {
+        renderDictionary().catch(() => undefined);
+      }
     });
   }
 
