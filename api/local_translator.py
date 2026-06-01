@@ -84,8 +84,32 @@ class MockLocalTranslator:
             if len(matched) == 1 and matched[0][0].casefold() == lowered:
                 normal = matched[0][1]
             else:
-                explanations = [f"{term}: {meaning}" for term, meaning in matched[:4]]
-                normal = "Mock translation fallback from local slang glossary: " + " | ".join(explanations)
+                substituted = cleaned
+                terms_explained = []
+                # To prevent matching substrings of replaced text, track replaced terms
+                for term, meaning in sorted(
+                    self._load_reference_entries(),
+                    key=lambda item: len(item[0]),
+                    reverse=True,
+                ):
+                    normalized_term = term.casefold().strip()
+                    if len(normalized_term) < 2:
+                        continue
+                    pattern = re.compile(rf"\b{re.escape(normalized_term)}\b", re.IGNORECASE)
+                    if pattern.search(substituted):
+                        clean_meaning = meaning.strip().rstrip(".")
+                        # Place brackets to indicate glossary translation
+                        substituted = pattern.sub(f"[{clean_meaning}]", substituted)
+                        terms_explained.append(f"{term}: {clean_meaning}")
+                
+                if terms_explained:
+                    substituted = re.sub(r"\s+", " ", substituted).strip()
+                    explanations = " | ".join(terms_explained[:4])
+                    normal = f"Offline Translation: {substituted} (Glossary: {explanations})"
+                else:
+                    explanations = [f"{term}: {meaning}" for term, meaning in matched[:4]]
+                    normal = "Mock translation fallback from local slang glossary: " + " | ".join(explanations)
+
             return LocalTranslationResult(
                 normal=normal,
                 used_mock=True,

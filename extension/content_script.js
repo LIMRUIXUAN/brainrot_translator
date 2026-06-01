@@ -796,21 +796,18 @@ if (!window.__brainrotContentScriptLoaded) {
           </div>
         </div>
         <div class="brainrot-launcher-actions">
-          <button type="button" class="brainrot-launcher-button brainrot-launcher-button--primary" data-brainrot-upload>Upload</button>
           <button type="button" class="brainrot-launcher-button brainrot-launcher-button--secondary" data-brainrot-capture>Capture</button>
           <button type="button" class="brainrot-launcher-button brainrot-launcher-button--toggle" data-brainrot-toggle-hover></button>
-          <button type="button" class="brainrot-launcher-button brainrot-launcher-button--icon" data-brainrot-scale-down aria-label="Scale floating pet down">-</button>
-          <div class="brainrot-launcher-scale-label" data-brainrot-scale-label>100%</div>
-          <button type="button" class="brainrot-launcher-button brainrot-launcher-button--icon" data-brainrot-scale-up aria-label="Scale floating pet up">+</button>
+        </div>
+        <div class="brainrot-launcher-scale-row">
+          <button type="button" class="brainrot-launcher-scale-btn" data-brainrot-scale-down aria-label="Scale floating pet down">−</button>
+          <span class="brainrot-launcher-scale-value" data-brainrot-scale-label>100%</span>
+          <button type="button" class="brainrot-launcher-scale-btn" data-brainrot-scale-up aria-label="Scale floating pet up">+</button>
         </div>
       </div>
     `;
 
-    const uploadInput = document.createElement("input");
-    uploadInput.type = "file";
-    uploadInput.accept = "image/*,.gif";
-    uploadInput.style.display = "none";
-    const uploadButton = dock.querySelector("[data-brainrot-upload]");
+
     const captureButton = dock.querySelector("[data-brainrot-capture]");
     const hoverToggle = dock.querySelector("[data-brainrot-toggle-hover]");
     const scaleDownButton = dock.querySelector("[data-brainrot-scale-down]");
@@ -819,7 +816,6 @@ if (!window.__brainrotContentScriptLoaded) {
     const restoreBar = dock.querySelector("[data-brainrot-restore]");
     const dragHandle = dock.querySelector(".brainrot-launcher-brand");
 
-    uploadButton.addEventListener("click", () => uploadInput.click());
     captureButton.addEventListener("click", async () => {
       try {
         const dataUrl = await captureVisibleTab();
@@ -857,25 +853,7 @@ if (!window.__brainrotContentScriptLoaded) {
       await writeSettings({ brainrotLauncherMinimized: false });
     });
 
-    uploadInput.addEventListener("change", async () => {
-      const [file] = uploadInput.files || [];
-      if (!file) {
-        return;
-      }
-      try {
-        const payload = await createFilePayload(file);
-        await analyzeMediaPayload(dock, payload);
-      } catch (error) {
-        bubble.showError(
-          dock,
-          error instanceof Error ? error.message : "Upload analysis failed."
-        );
-      } finally {
-        uploadInput.value = "";
-      }
-    });
 
-    dock.appendChild(uploadInput);
     document.body.appendChild(dock);
     makeLauncherDraggable(dock, dragHandle);
     applyLauncherPosition(dock);
@@ -900,11 +878,26 @@ if (!window.__brainrotContentScriptLoaded) {
   let lastMouseX = 0;
   let lastMouseY = 0;
   let lastAnalyzedElement = null;
+  let lastMoveTime = 0;
+  let lastCheckedX = 0;
+  let lastCheckedY = 0;
 
   document.addEventListener("mousemove", (event) => {
     if (!runtimeSettings.brainrotEnableHoverDetection) {
       return;
     }
+
+    const now = Date.now();
+    const deltaX = Math.abs(event.clientX - lastCheckedX);
+    const deltaY = Math.abs(event.clientY - lastCheckedY);
+
+    // Throttle checks to 100ms and minimum 8px displacement
+    if (now - lastMoveTime < 100 && deltaX < 8 && deltaY < 8) {
+      return;
+    }
+    lastMoveTime = now;
+    lastCheckedX = event.clientX;
+    lastCheckedY = event.clientY;
 
     lastMouseX = event.clientX;
     lastMouseY = event.clientY;

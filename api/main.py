@@ -298,8 +298,15 @@ def translate_text(text: str) -> TranslateResponse:
 
 def _looks_like_brainrot_text(text: str) -> bool:
     lowered = text.casefold()
+    # Check static markers first (fast)
     for marker in SLANG_TEXT_MARKERS:
         pattern = rf"(?<![a-z0-9]){re.escape(marker.casefold())}(?![a-z0-9])"
+        if re.search(pattern, lowered):
+            return True
+
+    # Check dynamic slang terms index keys
+    for marker in load_slang_terms_index().keys():
+        pattern = rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])"
         if re.search(pattern, lowered):
             return True
     return False
@@ -409,8 +416,11 @@ def decode_base64_payload(value: str, *, field_name: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 def _normalise_text_key(raw: str) -> str:
-    """Trim whitespace, lowercase – used as the cache lookup key for text."""
-    return raw.strip().casefold()
+    """Trim whitespace, lowercase, strip punctuation, and condense spaces."""
+    cleaned = raw.strip().casefold()
+    cleaned = re.sub(r"[^\w\s]", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
 
 
 def _hash_image_payload(image_base64: str) -> str:

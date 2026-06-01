@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -41,7 +43,7 @@ class BrainrotAgent:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def load_reference_examples(self) -> list[dict[str, str]]:
+    def load_reference_examples(self, input_text: Optional[str] = None) -> list[dict[str, str]]:
         reference_path: Path = self.settings.reference_dataset_path
         if not reference_path.exists():
             return []
@@ -52,26 +54,53 @@ class BrainrotAgent:
         if not isinstance(payload, list):
             return []
 
-        by_term = {
-            str(item.get("term", "")).strip().casefold(): item
-            for item in payload
-            if isinstance(item, dict) and str(item.get("term", "")).strip()
-        }
-        examples: list[dict[str, str]] = []
+        # Parse all entries
+        all_entries: list[dict[str, str]] = []
+        by_term = {}
+        for item in payload:
+            if isinstance(item, dict) and str(item.get("term", "")).strip():
+                t = str(item.get("term", "")).strip()
+                m = str(item.get("meaning", "")).strip()
+                if t and m:
+                    entry = {"term": t, "meaning": m}
+                    all_entries.append(entry)
+                    by_term[t.casefold()] = entry
+
+        # Match terms in input_text if provided
+        matched_examples: list[dict[str, str]] = []
+        if input_text:
+            lowered_input = input_text.casefold()
+            for entry in all_entries:
+                term_lower = entry["term"].casefold()
+                pattern = rf"\b{re.escape(term_lower)}\b"
+                if re.search(pattern, lowered_input):
+                    matched_examples.append(entry)
+
+        # Supplement with standard reference terms if matches are few
+        supplemented = list(matched_examples)
+        seen_terms = {item["term"].casefold() for item in supplemented}
+
         for term in REFERENCE_FOCUS_TERMS:
             entry = by_term.get(term.casefold())
-            if not entry:
-                continue
-            examples.append(
-                {
-                    "term": str(entry.get("term", "")).strip(),
-                    "meaning": str(entry.get("meaning", "")).strip(),
-                }
-            )
-        return examples
+            if entry and entry["term"].casefold() not in seen_terms:
+                supplemented.append(entry)
+                seen_terms.add(entry["term"].casefold())
+                if len(supplemented) >= 12:
+                    break
 
-    def build_reference_block(self) -> str:
-        examples = self.load_reference_examples()
+        # If still short, add other items from dataset
+        if len(supplemented) < 8:
+            for entry in all_entries:
+                if entry["term"].casefold() not in seen_terms:
+                    supplemented.append(entry)
+                    seen_terms.add(entry["term"].casefold())
+                    if len(supplemented) >= 12:
+                        break
+
+        return supplemented[:12]
+
+    def build_reference_block(self, input_text: Optional[str] = None) -> str:
+        examples = self.load_reference_examples(input_text)
         if not examples:
             return "Reference slang terms: unavailable."
 
@@ -118,6 +147,7 @@ class BrainrotAgent:
         return (
             "You are a structured internet-culture translation engine.\n"
             "Decide whether the highlighted text functions as brainrot, slang, or meme-coded internet speech.\n"
+            "Use the provided page host/domain and surrounding context to infer tone, irony, or platform-specific sarcasm.\n"
             "Return JSON only, following the schema exactly.\n"
             "Strict behavior rules:\n"
             "- Full Sentence Translation: translate the complete highlighted text structure into a natural, fully formed formal English sentence. Do not isolate only one slang keyword.\n"
@@ -142,15 +172,17 @@ class BrainrotAgent:
         surrounding_text: Optional[str],
     ) -> str:
         page_hint = page_url or "unavailable"
+        domain_hint = urlparse(page_url).netloc if page_url else "unavailable"
         surrounding = surrounding_text or "unavailable"
         return (
             f'Analyze the entire highlighted text selection: "{selected_text}"\n'
             "1. Translate the COMPLETE sentence context smoothly into formal English.\n"
             "2. Identify any core brainrot/slang elements and provide a sharp, concise explanation of its cultural context and exact internet stance.\n"
+            f"Page Host/Platform: {domain_hint}\n"
             f"Page URL hint: {page_hint}\n"
-            f"Surrounding text hint: {surrounding}\n"
+            f"Surrounding context: {surrounding}\n"
             "Estimate sentiment from the complete message, not from one isolated term.\n"
-            f"{self.build_reference_block()}"
+            f"{self.build_reference_block(selected_text)}"
         )
 
     def _build_image_system_prompt(self) -> str:
@@ -158,6 +190,7 @@ class BrainrotAgent:
             "You are a multimodal internet-culture classifier.\n"
             "Determine whether the attached image or GIF functions as brainrot vocabulary, "
             "not whether it is merely funny or emotional.\n"
+            "Use the provided page host/domain and context to determine platform-specific sarcasm or humor.\n"
             "Strict behavior rules:\n"
             "- Full Message Translation: translate the complete visual message into a natural, fully formed formal English sentence. Do not isolate only one meme label.\n"
             "- Capture the visual's social stance, implied joke, and internet-culture verdict.\n"
@@ -171,6 +204,7 @@ class BrainrotAgent:
 
     def _build_image_user_prompt(self, *, source_url: Optional[str], using_frame: bool) -> str:
         source_line = f"Source URL hint: {source_url}" if source_url else "Source URL hint: unavailable"
+        domain_hint = urlparse(source_url).netloc if source_url else "unavailable"
         frame_line = (
             "The attached image is a first-frame fallback extracted from a GIF."
             if using_frame
@@ -180,9 +214,10 @@ class BrainrotAgent:
             "Analyze the attached screenshot/media asset.\n"
             "1. Deconstruct the entire overarching message and translate it into a direct formal English sentence.\n"
             "2. Provide a brief, punchy explanation focusing on the core point of the brainrot meme meaning, ignoring unnecessary academic filler.\n"
+            f"Page Host/Platform: {domain_hint}\n"
             f"{source_line}\n"
             f"{frame_line}\n"
-            f"{self.build_reference_block()}"
+            f"{self.build_reference_block(None)}"
         )
 
     def _normalize_text_result(
