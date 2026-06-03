@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 node_modules/
 logs/*.log
+CODEX_TASKS.md
+reeeee copy.md
