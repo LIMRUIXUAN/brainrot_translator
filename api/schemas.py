@@ -35,6 +35,37 @@ class TranslateResponse(BaseModel):
     model_source: str = "local_transformer"
 
 
+class ReverseTranslateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(..., min_length=1)
+    page_url: Optional[str] = None
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("text cannot be empty")
+        return cleaned
+
+    @field_validator("page_url")
+    @classmethod
+    def validate_page_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class ReverseTranslateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reverse_text: str
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    model_used: str
+
+
 class HighlightedTextAnalysisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -89,9 +120,9 @@ class HighlightedTextAnalysisResponse(BaseModel):
             is_brainrot=False,
             brainrot_text=original_text,
             equivalent_text=equivalent_text or original_text,
-            formal_explanation="No model response was available; returned the safest available fallback.",
+            formal_explanation="No model response was available, so the original text was returned unchanged.",
             sentiment_label="unclear",
-            sentiment_rationale="Fallback response without live model evidence.",
+            sentiment_rationale="No live model evidence was available.",
             confidence_score=confidence_score,
             flagged_for_review=flagged_for_review,
             model_used=model_used,

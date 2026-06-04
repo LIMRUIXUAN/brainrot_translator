@@ -42,6 +42,7 @@
         "https://*/*"
       ],
       "css": [
+        "theme.css",
         "pet_shell.css"
       ],
       "js": [

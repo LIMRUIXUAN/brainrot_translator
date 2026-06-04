@@ -152,15 +152,10 @@ if (!window.__brainrotPetBubbleLoaded) {
       return this.state === "loading";
     }
 
-    _sentimentColor(label) {
-      const map = {
-        positive: "#22c55e",
-        negative: "#ef4444",
-        neutral: "#a3a3a3",
-        mixed: "#f59e0b",
-        unclear: "#6b7280"
-      };
-      return map[(label || "").toLowerCase()] || map.unclear;
+    _sentimentClass(label) {
+      const normalized = (label || "").toLowerCase();
+      const allowed = new Set(["positive", "negative", "neutral", "mixed", "unclear"]);
+      return allowed.has(normalized) ? normalized : "unclear";
     }
 
     showLoadingState(anchor, message = "Analyzing...") {
@@ -293,10 +288,10 @@ if (!window.__brainrotPetBubbleLoaded) {
       const equivalent = result.equivalent_text || originalText;
       const explanation = result.formal_explanation || "No expanded explanation was returned.";
       const sentiment = result.sentiment_label || "unclear";
-      const sentimentColor = this._sentimentColor(sentiment);
+      const sentimentClass = this._sentimentClass(sentiment);
       const chips = [
         `<div class="brainrot-bubble-chip">Confidence ${confidence}%</div>`,
-        `<div class="brainrot-bubble-chip" style="border-color:${sentimentColor};color:${sentimentColor}">● ${this.escapeHtml(sentiment)}</div>`
+        `<div class="brainrot-bubble-chip brainrot-bubble-chip--sentiment-${sentimentClass}">● ${this.escapeHtml(sentiment)}</div>`
       ];
       if (result.flagged_for_review) {
         chips.push(`<div class="brainrot-bubble-chip brainrot-bubble-chip--warn">Queued for review</div>`);
@@ -348,7 +343,7 @@ if (!window.__brainrotPetBubbleLoaded) {
         "No formal explanation was returned.";
       const chips = [`<div class="brainrot-bubble-chip">Confidence ${confidence}%</div>`];
       if (result.used_frame_fallback) {
-        chips.push(`<div class="brainrot-bubble-chip brainrot-bubble-chip--fallback">GIF first-frame fallback</div>`);
+        chips.push(`<div class="brainrot-bubble-chip brainrot-bubble-chip--fallback">GIF first frame</div>`);
       }
       if (result.flagged_for_review) {
         chips.push(`<div class="brainrot-bubble-chip brainrot-bubble-chip--warn">Queued for review</div>`);

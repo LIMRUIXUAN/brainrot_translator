@@ -17,4 +17,7 @@ class MockLocalTranslatorTests(unittest.TestCase):
         translator = MockLocalTranslator(get_settings().reference_dataset_path)
         result = translator.translate("plain sentence")
         self.assertTrue(result.used_mock)
-        self.assertIn("mock", result.normal.lower())
+        self.assertEqual(result.normal, "plain sentence")
+        self.assertNotIn("mock", result.normal.lower())
+        self.assertNotIn("fallback", result.normal.lower())
+        self.assertNotIn("offline translation", result.normal.lower())

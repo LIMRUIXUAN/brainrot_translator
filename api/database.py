@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -12,6 +13,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .config import get_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -154,7 +158,19 @@ def get_session_factory() -> Optional[sessionmaker[Session]]:
         Base.metadata.create_all(engine)
         return sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
     except Exception:
+        logger.exception("get_session_factory failed for database_url=%s", database_url)
         return None
+
+
+def _is_cache_expired(created_at: Optional[datetime]) -> bool:
+    if created_at is None:
+        return True
+
+    settings = get_settings()
+    cached_at = created_at
+    if cached_at.tzinfo is None:
+        cached_at = cached_at.replace(tzinfo=timezone.utc)
+    return cached_at + timedelta(hours=settings.cache_ttl_hours) < datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +201,12 @@ def flag_image_for_review(
             session.commit()
         return True
     except SQLAlchemyError:
+        logger.exception(
+            "flag_image_for_review failed for source_url=%s media_type=%s confidence=%s",
+            source_url,
+            media_type,
+            confidence,
+        )
         return False
 
 
@@ -212,6 +234,12 @@ def flag_text_for_review(
             session.commit()
         return True
     except SQLAlchemyError:
+        logger.exception(
+            "flag_text_for_review failed for source_text=%s page_url=%s confidence=%s",
+            source_text[:120],
+            page_url,
+            confidence,
+        )
         return False
 
 
@@ -288,6 +316,10 @@ def lookup_cached_text(lookup_key: str) -> Optional[dict[str, Any]]:
             )
             if row is None:
                 return None
+            if _is_cache_expired(row.created_at):
+                session.delete(row)
+                session.commit()
+                return None
             return {
                 "is_brainrot": row.is_brainrot,
                 "brainrot_text": row.brainrot_text,
@@ -300,6 +332,7 @@ def lookup_cached_text(lookup_key: str) -> Optional[dict[str, Any]]:
                 "model_used": row.model_used,
             }
     except SQLAlchemyError:
+        logger.exception("lookup_cached_text failed for lookup_key=%s", lookup_key)
         return None
 
 
@@ -331,6 +364,7 @@ def save_cached_text(lookup_key: str, data: dict[str, Any]) -> bool:
             session.commit()
         return True
     except SQLAlchemyError:
+        logger.exception("save_cached_text failed for lookup_key=%s", lookup_key)
         return False
 
 
@@ -382,6 +416,11 @@ def increment_word_frequencies(
             session.commit()
         return True
     except SQLAlchemyError:
+        logger.exception(
+            "increment_word_frequencies failed for terms=%s page_url=%s",
+            list(terms.keys())[:20],
+            page_url,
+        )
         return False
 
 
@@ -413,6 +452,7 @@ def list_word_frequencies(limit: int = 20) -> list[dict[str, Any]]:
                 for row in rows
             ]
     except SQLAlchemyError:
+        logger.exception("list_word_frequencies failed for limit=%s", limit)
         return []
 
 
@@ -438,6 +478,10 @@ def lookup_cached_image(image_hash: str) -> Optional[dict[str, Any]]:
             )
             if row is None:
                 return None
+            if _is_cache_expired(row.created_at):
+                session.delete(row)
+                session.commit()
+                return None
             return {
                 "is_brainrot": row.is_brainrot,
                 "brainrot_meaning": row.brainrot_meaning,
@@ -449,6 +493,7 @@ def lookup_cached_image(image_hash: str) -> Optional[dict[str, Any]]:
                 "used_frame_fallback": row.used_frame_fallback,
             }
     except SQLAlchemyError:
+        logger.exception("lookup_cached_image failed for image_hash=%s", image_hash)
         return None
 
 
@@ -475,6 +520,7 @@ def save_cached_image(image_hash: str, data: dict[str, Any]) -> bool:
             session.commit()
         return True
     except SQLAlchemyError:
+        logger.exception("save_cached_image failed for image_hash=%s", image_hash)
         return False
 
 
@@ -509,4 +555,5 @@ def get_dashboard_stats() -> dict[str, Any]:
                 "top_term_count": top_row.count if top_row else 0,
             }
     except SQLAlchemyError:
+        logger.exception("get_dashboard_stats failed")
         return defaults

@@ -104,11 +104,10 @@ class MockLocalTranslator:
                 
                 if terms_explained:
                     substituted = re.sub(r"\s+", " ", substituted).strip()
-                    explanations = " | ".join(terms_explained[:4])
-                    normal = f"Offline Translation: {substituted} (Glossary: {explanations})"
+                    normal = substituted
                 else:
                     explanations = [f"{term}: {meaning}" for term, meaning in matched[:4]]
-                    normal = "Mock translation fallback from local slang glossary: " + " | ".join(explanations)
+                    normal = "Possible meaning: " + " | ".join(explanations)
 
             return LocalTranslationResult(
                 normal=normal,
@@ -118,7 +117,7 @@ class MockLocalTranslator:
             )
 
         return LocalTranslationResult(
-            normal=f"Mock translation fallback: {cleaned}",
+            normal=cleaned,
             used_mock=True,
             matched_terms=(),
             model_source="mock_glossary",

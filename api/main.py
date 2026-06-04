@@ -35,6 +35,8 @@ from .schemas import (
     HighlightedTextAnalysisResponse,
     ImageAnalysisRequest,
     ImageAnalysisResponse,
+    ReverseTranslateRequest,
+    ReverseTranslateResponse,
     ScreenshotMediaRequest,
     TranslateResponse,
 )
@@ -158,13 +160,12 @@ def get_quality_classifier_components():
         return None
 
 
-def _generate_local_translation(text: str) -> str | None:
+def _generate_local_model_output(prompt: str) -> str | None:
     components = get_model_components()
     if components is None:
         return None
 
     tokenizer, model = components
-    prompt = f"Convert brainrot English to normal English: {text.strip()}"
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=128)
     outputs = model.generate(
         **inputs,
@@ -173,6 +174,14 @@ def _generate_local_translation(text: str) -> str | None:
         do_sample=False,
     )
     return tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+
+
+def _generate_local_translation(text: str) -> str | None:
+    return _generate_local_model_output(f"Convert brainrot English to normal English: {text.strip()}")
+
+
+def _generate_local_reverse_translation(text: str) -> str | None:
+    return _generate_local_model_output(f"Convert normal English to brainrot English: {text.strip()}")
 
 
 def _heuristic_translation_confidence(source_text: str, candidate_text: str, *, changed: bool) -> float:
@@ -296,6 +305,20 @@ def translate_text(text: str) -> TranslateResponse:
         used_mock=False,
         model_source="local_transformer",
     )
+
+
+async def reverse_translate_text(text: str) -> ReverseTranslateResponse:
+    cleaned = text.strip()
+    local_reverse = _generate_local_reverse_translation(cleaned)
+    if local_reverse:
+        changed = local_reverse.casefold() != cleaned.casefold()
+        return ReverseTranslateResponse(
+            reverse_text=local_reverse,
+            confidence_score=0.72 if changed else 0.45,
+            model_used="local_transformer_reverse_prompt",
+        )
+
+    return await agent.reverse_translate(cleaned)
 
 
 def _looks_like_brainrot_text(text: str) -> bool:
@@ -588,6 +611,21 @@ def create_app() -> FastAPI:
                 status_code=500,
                 content={"error": f"Generation failed: {exc}"},
             )
+
+    @app.post(
+        "/api/v1/reverse-translate",
+        response_model=ReverseTranslateResponse,
+    )
+    async def reverse_translate(
+        request: ReverseTranslateRequest,
+    ) -> ReverseTranslateResponse:
+        result = await reverse_translate_text(request.text)
+        logger.info(
+            "REVERSE TRANSLATE for %r via %s",
+            request.text[:80],
+            result.model_used,
+        )
+        return result
 
     # ------------------------------------------------------------------
     # TEXT HIGHLIGHT – cache-first policy

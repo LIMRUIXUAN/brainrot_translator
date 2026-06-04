@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import base64
 import unittest
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+import api.main as api_main
 from api import database
 from api.main import app
-from api.schemas import HighlightedTextAnalysisResponse, ImageAnalysisResponse
+from api.schemas import HighlightedTextAnalysisResponse, ImageAnalysisResponse, ReverseTranslateResponse
 
 
 class ApiTests(unittest.TestCase):
@@ -72,6 +75,29 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(model.kwargs["num_beams"], 4)
         self.assertFalse(model.kwargs["do_sample"])
 
+    def test_reverse_translate_delegates_to_agent_when_local_model_unavailable(self) -> None:
+        agent_mock = AsyncMock(
+            return_value=ReverseTranslateResponse(
+                reverse_text="bro got mad rizz",
+                confidence_score=0.88,
+                model_used="openrouter/test",
+            )
+        )
+
+        with patch("api.main.get_model_components", return_value=None), \
+             patch("api.main.agent.reverse_translate", agent_mock):
+            response = self.client.post(
+                "/api/v1/reverse-translate",
+                json={"text": "He is very charming", "page_url": "sidepanel-direct-input"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["reverse_text"], "bro got mad rizz")
+        self.assertEqual(payload["confidence_score"], 0.88)
+        self.assertEqual(payload["model_used"], "openrouter/test")
+        agent_mock.assert_awaited_once_with("He is very charming")
+
     def test_highlighted_text_route_stages_low_confidence_review(self) -> None:
         mocked_result = HighlightedTextAnalysisResponse(
             is_brainrot=True,
@@ -88,6 +114,7 @@ class ApiTests(unittest.TestCase):
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main._try_db_text_lookup", return_value=None), \
              patch("api.main._try_local_model_text_analysis", return_value=None), \
+             patch("api.main.settings", replace(api_main.settings, low_confidence_threshold=0.7)), \
              patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", AsyncMock(return_value=mocked_result)), \
              patch("api.main.flag_text_for_review") as flag_mock:
@@ -164,6 +191,7 @@ class ApiTests(unittest.TestCase):
 
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main._try_local_model_text_analysis", return_value=local_result), \
+             patch("api.main.settings", replace(api_main.settings, low_confidence_threshold=0.7)), \
              patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", agent_mock):
                 response = self.client.post(
@@ -378,6 +406,7 @@ class ApiTests(unittest.TestCase):
         )
 
         with patch("api.main._try_db_image_lookup", return_value=None), \
+             patch("api.main.settings", replace(api_main.settings, low_confidence_threshold=0.7)), \
              patch("api.main.save_cached_image", return_value=True), \
              patch("api.main.agent.analyze_screenshot_media", AsyncMock(return_value=mocked_result)), \
              patch("api.main.flag_image_for_review") as flag_mock:
@@ -494,6 +523,50 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(cached["equivalent_text"], second["equivalent_text"])
         self.assertEqual(cached["confidence_score"], 0.92)
         self.assertEqual(cached["model_used"], "deepseek/deepseek-v4-flash")
+
+    def test_expired_cache_rows_are_deleted_on_lookup(self) -> None:
+        engine = create_engine("sqlite:///:memory:", future=True)
+        database.Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+        expired_at = datetime.now(timezone.utc) - timedelta(hours=2)
+
+        text_result = {
+            "is_brainrot": True,
+            "brainrot_text": "rizz",
+            "equivalent_text": "charisma",
+            "formal_explanation": "Rizz means charisma.",
+            "sentiment_label": "positive",
+            "sentiment_rationale": "Complimentary.",
+            "confidence_score": 0.91,
+            "model_used": "test",
+        }
+        image_result = {
+            "is_brainrot": True,
+            "brainrot_meaning": "ratio",
+            "equivalent_text": "public rejection",
+            "formal_explanation": "Ratio means social pushback.",
+            "confidence_score": 0.88,
+            "model_used": "test",
+            "used_frame_fallback": False,
+        }
+
+        ttl_settings = replace(database.get_settings(), cache_ttl_hours=1)
+        with patch("api.database.get_session_factory", return_value=session_factory), \
+             patch("api.database.get_settings", return_value=ttl_settings):
+            self.assertTrue(database.save_cached_text("rizz", text_result))
+            self.assertTrue(database.save_cached_image("a" * 64, image_result))
+            with session_factory() as session:
+                text_row = session.query(database.CachedTextTranslation).first()
+                image_row = session.query(database.CachedImageAnalysis).first()
+                text_row.created_at = expired_at
+                image_row.created_at = expired_at
+                session.commit()
+
+            self.assertIsNone(database.lookup_cached_text("rizz"))
+            self.assertIsNone(database.lookup_cached_image("a" * 64))
+            with session_factory() as session:
+                self.assertEqual(session.query(database.CachedTextTranslation).count(), 0)
+                self.assertEqual(session.query(database.CachedImageAnalysis).count(), 0)
 
     def test_word_frequency_helpers_increment_and_sort(self) -> None:
         engine = create_engine("sqlite:///:memory:", future=True)

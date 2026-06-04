@@ -14,6 +14,7 @@ if (!window.__brainrotContentScriptLoaded) {
     brainrotEnableHoverDetection: true,
     brainrotEnableLauncher: true,
     brainrotEnableClipboardPaste: true,
+    brainrotEnableInlineAnnotation: false,
     brainrotLauncherPosition: null,
     brainrotLauncherScale: 1,
     brainrotLauncherMinimized: false
@@ -34,6 +35,25 @@ if (!window.__brainrotContentScriptLoaded) {
     "skibidi", "grimace", "caught", "based", "slay", "rizz",
     "aura", "mid", "bffr", "ate"
   ];
+  const BRAINROT_TERM_TRANSLATIONS = Object.freeze({
+    aura: "social presence or personal energy",
+    ate: "did something very well",
+    based: "confident, authentic, or agreeable",
+    bffr: "be serious or be realistic",
+    caught: "exposed or found out",
+    cope: "a weak excuse for losing or being wrong",
+    grimace: "meme reference, often absurd or chaotic",
+    meme: "internet joke or cultural reference",
+    mid: "average or unimpressive",
+    npc: "someone acting generic or unoriginal",
+    ohio: "weird, cursed, or chaotic",
+    ratio: "a reply getting more attention than the original post",
+    rizz: "charisma or flirting ability",
+    sigma: "self-styled independent or dominant person",
+    skibidi: "absurd meme slang from Skibidi Toilet",
+    skill: "ability, often used in 'skill issue'",
+    slay: "to do something very well"
+  });
 
   /* ── Phase 4: Retry / Rate-Limit / Dedup constants ───────────── */
   const MAX_RETRIES = 2;
@@ -49,6 +69,7 @@ if (!window.__brainrotContentScriptLoaded) {
   let runtimeSettings = { ...DEFAULT_SETTINGS };
   let hoverRequestId = 0;
   let extensionContextInvalidated = false;
+  let highlightedElements = new Set();
 
   /* ── Phase 8: Custom dictionary cache ────────────────────────── */
   let customDictionary = [];
@@ -137,6 +158,10 @@ if (!window.__brainrotContentScriptLoaded) {
         typeof raw.brainrotEnableClipboardPaste === "boolean"
           ? raw.brainrotEnableClipboardPaste
           : DEFAULT_SETTINGS.brainrotEnableClipboardPaste,
+      brainrotEnableInlineAnnotation:
+        typeof raw.brainrotEnableInlineAnnotation === "boolean"
+          ? raw.brainrotEnableInlineAnnotation
+          : DEFAULT_SETTINGS.brainrotEnableInlineAnnotation,
       brainrotLauncherPosition:
         raw.brainrotLauncherPosition &&
         Number.isFinite(raw.brainrotLauncherPosition.left) &&
@@ -297,6 +322,159 @@ if (!window.__brainrotContentScriptLoaded) {
     }
   }
 
+  function incrementBrainrotBadge(amount = 1) {
+    if (!hasLiveExtensionContext()) return;
+    try {
+      const count = Math.max(1, Math.floor(Number(amount) || 1));
+      chrome.runtime.sendMessage({ action: "brainrotIncrementBadge", amount: count });
+    } catch (e) {
+      // Ignore badge failures so analysis output still appears.
+    }
+  }
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function buildScanTermMap() {
+    const terms = new Map();
+    for (const keyword of BRAINROT_KEYWORDS) {
+      const normalized = keyword.toLowerCase();
+      terms.set(normalized, {
+        term: keyword,
+        meaning: BRAINROT_TERM_TRANSLATIONS[normalized] || "Recognized brainrot slang"
+      });
+    }
+    for (const entry of customDictionary) {
+      const term = String(entry?.term || "").trim();
+      const meaning = String(entry?.meaning || "").trim();
+      if (term && meaning) {
+        terms.set(term.toLowerCase(), { term, meaning });
+      }
+    }
+    return terms;
+  }
+
+  function shouldScanTextNode(node) {
+    if (!node?.textContent?.trim()) return false;
+    const parent = node.parentElement;
+    if (!parent) return false;
+    if (parent.closest("#brainrot-floating-launcher, #brainrot-pet-bubble, .brainrot-inline-highlight, .brainrot-inline-annotation")) {
+      return false;
+    }
+    if (parent.closest("script, style, noscript, textarea, input, select, option, button")) {
+      return false;
+    }
+    if (parent.isContentEditable) return false;
+    const style = window.getComputedStyle(parent);
+    return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0;
+  }
+
+  function createScanRegex(termMap) {
+    const terms = Array.from(termMap.keys()).sort((a, b) => b.length - a.length);
+    if (terms.length === 0) return null;
+    return new RegExp(`\\b(${terms.map(escapeRegExp).join("|")})\\b`, "gi");
+  }
+
+  function wrapBrainrotMatches(textNode, regex, termMap) {
+    const text = textNode.textContent || "";
+    let match = null;
+    let lastIndex = 0;
+    let count = 0;
+    const fragment = document.createDocumentFragment();
+
+    regex.lastIndex = 0;
+    while ((match = regex.exec(text)) !== null) {
+      const matchedText = match[0];
+      const termInfo = termMap.get(matchedText.toLowerCase());
+      if (!termInfo) continue;
+
+      if (match.index > lastIndex) {
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+
+      const span = document.createElement("span");
+      span.className = "brainrot-inline-highlight";
+      span.dataset.brainrotTerm = termInfo.term;
+      span.dataset.brainrotMeaning = termInfo.meaning;
+      span.textContent = matchedText;
+      fragment.appendChild(span);
+      highlightedElements.add(span);
+      count += 1;
+      lastIndex = match.index + matchedText.length;
+    }
+
+    if (count === 0) return 0;
+    if (lastIndex < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+    textNode.parentNode?.replaceChild(fragment, textNode);
+    return count;
+  }
+
+  function clearPageHighlights() {
+    const spans = Array.from(document.querySelectorAll(".brainrot-inline-highlight"));
+    for (const span of spans) {
+      const parent = span.parentNode;
+      if (!parent) continue;
+      parent.replaceChild(document.createTextNode(span.textContent || ""), span);
+      parent.normalize?.();
+    }
+    highlightedElements.clear();
+    return spans.length;
+  }
+
+  async function scanPageForBrainrot() {
+    clearPageHighlights();
+    const termMap = buildScanTermMap();
+    const regex = createScanRegex(termMap);
+    if (!regex) return 0;
+
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_TEXT,
+      { acceptNode: (node) => shouldScanTextNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT }
+    );
+    const nodes = [];
+    while (walker.nextNode()) {
+      nodes.push(walker.currentNode);
+    }
+
+    let index = 0;
+    let count = 0;
+    await new Promise((resolve) => {
+      const processChunk = (deadline) => {
+        const startedAt = performance.now();
+        while (index < nodes.length) {
+          count += wrapBrainrotMatches(nodes[index], regex, termMap);
+          index += 1;
+          const hasIdleTime = !deadline || deadline.timeRemaining?.() > 3;
+          if (!hasIdleTime || performance.now() - startedAt > 12) break;
+        }
+        if (index < nodes.length) {
+          if ("requestIdleCallback" in window) {
+            window.requestIdleCallback(processChunk, { timeout: 250 });
+          } else {
+            window.setTimeout(processChunk, 16);
+          }
+          return;
+        }
+        resolve();
+      };
+
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(processChunk, { timeout: 250 });
+      } else {
+        window.setTimeout(processChunk, 0);
+      }
+    });
+
+    if (count > 0) {
+      incrementBrainrotBadge(count);
+    }
+    return count;
+  }
+
   /* ── Media helpers (unchanged core logic) ────────────────────── */
   function getMediaUrl(element) {
     if (!element) return null;
@@ -417,8 +595,7 @@ if (!window.__brainrotContentScriptLoaded) {
     });
   }
 
-  async function createHoverPayload(element) {
-    const sourceUrl = getMediaUrl(element);
+  async function createMediaUrlPayload(sourceUrl) {
     if (!sourceUrl) throw new Error("Media URL not found.");
     const mediaType = getMediaType(sourceUrl);
     const fetched = await fetchMediaAsset(sourceUrl);
@@ -435,6 +612,10 @@ if (!window.__brainrotContentScriptLoaded) {
       payload.previewSrc = firstFrame.dataUrl;
     }
     return payload;
+  }
+
+  async function createHoverPayload(element) {
+    return createMediaUrlPayload(getMediaUrl(element));
   }
 
   async function createFilePayload(file) {
@@ -463,6 +644,7 @@ if (!window.__brainrotContentScriptLoaded) {
       page_title: payload.page_title, page_domain: payload.page_domain
     });
     if (!result.is_brainrot) { bubble.hide(); return; }
+    incrementBrainrotBadge();
     bubble.showImageAnalysisResult(anchor, result, payload.previewSrc);
     // Phase 3: Save image analysis to history
     saveToHistory({
@@ -487,8 +669,41 @@ if (!window.__brainrotContentScriptLoaded) {
       selectedText: text,
       surroundingText: range.commonAncestorContainer?.textContent?.trim()?.slice(0, 280) || null,
       nearestHeading: getNearestHeading(range),
-      rect
+      rect,
+      range: range.cloneRange()
     };
+  }
+
+  function annotateSelectionInline(selectionData, result) {
+    if (!runtimeSettings.brainrotEnableInlineAnnotation) return false;
+    const translation = String(result.equivalent_text || result.formal_explanation || "").trim();
+    if (!translation || !selectionData?.range) return false;
+
+    const range = selectionData.range.cloneRange();
+    if (range.collapsed || range.commonAncestorContainer?.nodeType !== Node.TEXT_NODE) {
+      return false;
+    }
+
+    const parentElement = range.commonAncestorContainer.parentElement;
+    if (!parentElement || parentElement.closest(".brainrot-inline-annotation, .brainrot-inline-highlight")) {
+      return false;
+    }
+
+    const span = document.createElement("span");
+    span.className = "brainrot-inline-annotation";
+    span.dataset.translation = translation.slice(0, 280);
+    span.dataset.confidence = String(Math.round((Number(result.confidence_score) || 0) * 100));
+
+    try {
+      const contents = range.extractContents();
+      span.appendChild(contents);
+      range.insertNode(span);
+      window.getSelection()?.removeAllRanges();
+      return true;
+    } catch (error) {
+      span.remove();
+      return false;
+    }
   }
 
   async function runSelectionAnalysis(selectionData) {
@@ -505,13 +720,19 @@ if (!window.__brainrotContentScriptLoaded) {
         flagged_for_review: false,
         model_used: "custom_dictionary"
       };
-      bubble.showTextAnalysisResult(selectionData.rect, fakeResult, selectionData.selectedText, async () => {
-        await runSelectionRecheck(selectionData);
-      });
+      const annotated = annotateSelectionInline(selectionData, fakeResult);
+      if (annotated) {
+        bubble.hide();
+      } else {
+        bubble.showTextAnalysisResult(selectionData.rect, fakeResult, selectionData.selectedText, async () => {
+          await runSelectionRecheck(selectionData);
+        });
+      }
       saveToHistory({
         type: "text", original: selectionData.selectedText,
         translation: customMatch.meaning, sentiment: "neutral", confidence: 1.0
       });
+      incrementBrainrotBadge();
       return;
     }
 
@@ -536,9 +757,15 @@ if (!window.__brainrotContentScriptLoaded) {
         );
         return;
       }
-      bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText, async () => {
-        await runSelectionRecheck(selectionData);
-      });
+      const annotated = annotateSelectionInline(selectionData, result);
+      if (annotated) {
+        bubble.hide();
+      } else {
+        bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText, async () => {
+          await runSelectionRecheck(selectionData);
+        });
+      }
+      incrementBrainrotBadge();
       // Phase 3: Save to history
       saveToHistory({
         type: "text", original: selectionData.selectedText,
@@ -745,6 +972,8 @@ if (!window.__brainrotContentScriptLoaded) {
           </div>
         </div>
         <div class="brainrot-launcher-actions">
+          <button type="button" class="brainrot-launcher-button brainrot-launcher-button--primary" data-brainrot-scan>Scan Page</button>
+          <button type="button" class="brainrot-launcher-button brainrot-launcher-button--secondary" data-brainrot-clear-highlights>Clear</button>
           <button type="button" class="brainrot-launcher-button brainrot-launcher-button--secondary" data-brainrot-capture>Capture</button>
           <button type="button" class="brainrot-launcher-button brainrot-launcher-button--toggle" data-brainrot-toggle-hover></button>
         </div>
@@ -757,6 +986,8 @@ if (!window.__brainrotContentScriptLoaded) {
     `;
 
     const captureButton = dock.querySelector("[data-brainrot-capture]");
+    const scanButton = dock.querySelector("[data-brainrot-scan]");
+    const clearHighlightsButton = dock.querySelector("[data-brainrot-clear-highlights]");
     const hoverToggle = dock.querySelector("[data-brainrot-toggle-hover]");
     const scaleDownButton = dock.querySelector("[data-brainrot-scale-down]");
     const scaleUpButton = dock.querySelector("[data-brainrot-scale-up]");
@@ -764,6 +995,34 @@ if (!window.__brainrotContentScriptLoaded) {
     const restoreBar = dock.querySelector("[data-brainrot-restore]");
     const dragHandle = dock.querySelector(".brainrot-launcher-brand");
 
+    scanButton.addEventListener("click", async () => {
+      scanButton.disabled = true;
+      const originalText = scanButton.textContent;
+      scanButton.textContent = "Scanning...";
+      try {
+        const count = await scanPageForBrainrot();
+        bubble.showTimedInfo(
+          dock,
+          count > 0 ? "Page Scan Complete" : "No Terms Found",
+          count > 0 ? `Highlighted ${count} brainrot term${count === 1 ? "" : "s"} on this page.` : "No recognized brainrot terms were visible on this page.",
+          4
+        );
+      } catch (error) {
+        bubble.showError(dock, error instanceof Error ? error.message : "Page scan failed.");
+      } finally {
+        scanButton.disabled = false;
+        scanButton.textContent = originalText;
+      }
+    });
+    clearHighlightsButton.addEventListener("click", () => {
+      const count = clearPageHighlights();
+      bubble.showTimedInfo(
+        dock,
+        "Highlights Cleared",
+        count > 0 ? `Removed ${count} inline highlight${count === 1 ? "" : "s"}.` : "There were no page highlights to clear.",
+        3
+      );
+    });
     captureButton.addEventListener("click", async () => {
       try {
         const dataUrl = await captureVisibleTab();
@@ -934,6 +1193,49 @@ if (!window.__brainrotContentScriptLoaded) {
             runSelectionAnalysis(fakeData).catch(() => undefined);
           }
           sendResponse({ ok: true });
+          return false;
+        }
+
+        // Phase 6: Context menu image analysis
+        if (message?.action === "brainrotContextMenuImage") {
+          const sourceUrl = typeof message.srcUrl === "string" ? message.srcUrl.trim() : "";
+          const anchor = getDebugAnchor();
+          if (!sourceUrl) {
+            bubble.showError(anchor, "Image URL not found.");
+            sendResponse({ ok: false, error: "Image URL not found." });
+            return false;
+          }
+
+          createMediaUrlPayload(sourceUrl)
+            .then((payload) => analyzeMediaPayload(anchor, payload))
+            .catch((error) => {
+              bubble.showError(anchor, error instanceof Error ? error.message : "Image analysis failed.");
+            });
+          sendResponse({ ok: true });
+          return false;
+        }
+
+        if (message?.action === "brainrotScanPage") {
+          const anchor = getDebugAnchor();
+          scanPageForBrainrot()
+            .then((count) => {
+              bubble.showTimedInfo(
+                anchor,
+                count > 0 ? "Page Scan Complete" : "No Terms Found",
+                count > 0 ? `Highlighted ${count} brainrot term${count === 1 ? "" : "s"} on this page.` : "No recognized brainrot terms were visible on this page.",
+                4
+              );
+            })
+            .catch((error) => {
+              bubble.showError(anchor, error instanceof Error ? error.message : "Page scan failed.");
+            });
+          sendResponse({ ok: true });
+          return false;
+        }
+
+        if (message?.action === "brainrotClearPageHighlights") {
+          const count = clearPageHighlights();
+          sendResponse({ ok: true, count });
           return false;
         }
 

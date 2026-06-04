@@ -5,12 +5,48 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Brainrot Translator Panel</title>
+  <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="popup.css" />
   <link rel="stylesheet" href="sidepanel.css" />
 </head>
 
 <body class="sidepanel-page">
   <main class="popup-shell">
+    <section id="onboardingOverlay" class="onboarding-overlay" hidden aria-modal="true" role="dialog">
+      <div class="onboarding-card">
+        <div class="onboarding-step is-active" data-onboarding-step="0">
+          <div class="onboarding-emoji">🧠</div>
+          <h2>Welcome to Brainrot Translator!</h2>
+          <p>Translate internet slang and meme-coded text without leaving the page.</p>
+        </div>
+        <div class="onboarding-step" data-onboarding-step="1">
+          <div class="onboarding-emoji">✍️</div>
+          <h2>Highlight Any Slang Text</h2>
+          <p>Select text on a webpage and the extension will check whether it needs translation.</p>
+        </div>
+        <div class="onboarding-step" data-onboarding-step="2">
+          <div class="onboarding-emoji">💬</div>
+          <h2>The Pet Translates It</h2>
+          <p>The floating pet shows a concise English meaning, confidence, and context.</p>
+        </div>
+        <div class="onboarding-step" data-onboarding-step="3">
+          <div class="onboarding-emoji">🖼️</div>
+          <h2>Hover Over Meme Images</h2>
+          <p>Image and GIF hover detection can analyze likely memes from the current page.</p>
+        </div>
+        <div class="onboarding-dots" id="onboardingDots" aria-label="Tutorial progress"></div>
+        <label class="onboarding-checkbox">
+          <input id="onboardingDontShow" type="checkbox" />
+          <span>Don't show again</span>
+        </label>
+        <div class="onboarding-actions">
+          <button id="onboardingSkipButton" class="ghost-button" type="button">Skip</button>
+          <button id="onboardingNextButton" class="primary-button" type="button">Next</button>
+          <button id="onboardingStartButton" class="primary-button" type="button" hidden>Get Started</button>
+        </div>
+      </div>
+    </section>
+
     <section class="hero-card">
       <div class="hero-mark">🧠</div>
       <div>
@@ -23,7 +59,24 @@
       </div>
     </section>
 
-    <section class="panel panel-callout">
+    <nav class="sidepanel-tabs" aria-label="Side panel sections">
+      <button id="tabTranslateScan" class="sidepanel-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="translateScanView" data-tab-target="translate-scan">
+        <span>Translate</span>
+        <small>Scan</small>
+      </button>
+      <button id="tabHistoryGlossary" class="sidepanel-tab" type="button" role="tab" aria-selected="false" aria-controls="historyGlossaryView" data-tab-target="history-glossary">
+        <span>History</span>
+        <small>Glossary</small>
+      </button>
+      <button id="tabSettingsStatus" class="sidepanel-tab" type="button" role="tab" aria-selected="false" aria-controls="settingsStatusView" data-tab-target="settings-status">
+        <span>Settings</span>
+        <small>Status</small>
+      </button>
+    </nav>
+
+    <div class="tab-panels">
+      <section id="translateScanView" class="tab-panel is-active" role="tabpanel" aria-labelledby="tabTranslateScan" data-tab-panel="translate-scan">
+        <section class="panel panel-callout">
       <div class="panel-heading">
         <div>
           <p class="panel-kicker">How To Test</p>
@@ -48,6 +101,29 @@
       </p>
     </section>
 
+    <section class="panel direct-translate-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="panel-kicker">Direct Translate</p>
+          <h2>Paste Text</h2>
+        </div>
+      </div>
+
+      <label class="field">
+        <span>Text</span>
+        <textarea id="directTranslateInput" rows="3" placeholder="Paste or type brainrot text here..."></textarea>
+      </label>
+      <label class="field compact-field">
+        <span>Direction</span>
+        <select id="translateDirection">
+          <option value="to-english">Brainrot → English</option>
+          <option value="to-brainrot">English → Brainrot</option>
+        </select>
+      </label>
+      <button id="directTranslateButton" class="primary-button" type="button">Translate</button>
+      <div id="directTranslateResult" class="direct-translate-result" aria-live="polite"></div>
+    </section>
+
     <section class="panel">
       <div class="panel-heading">
         <div>
@@ -59,6 +135,10 @@
         <button id="checkPageButton" class="primary-button" type="button">Check Active Page</button>
         <button id="showTestBubbleButton" class="ghost-button" type="button">Show Test Bubble</button>
       </div>
+      <div class="button-row">
+        <button id="scanPageButton" class="primary-button" type="button">Scan Page</button>
+        <button id="clearPageHighlightsButton" class="ghost-button" type="button">Clear Highlights</button>
+      </div>
       <div class="health-grid">
         <article class="health-card" id="pageStatusCard">
           <p class="health-label">Content Script</p>
@@ -68,6 +148,9 @@
       </div>
     </section>
 
+      </section>
+
+      <section id="settingsStatusView" class="tab-panel" role="tabpanel" aria-labelledby="tabSettingsStatus" data-tab-panel="settings-status" hidden>
     <section class="panel">
       <div class="panel-heading">
         <div>
@@ -137,6 +220,18 @@
         </span>
         <input id="enableClipboardPaste" type="checkbox" />
       </label>
+
+      <label class="toggle-row">
+        <span>
+          <strong>Inline text annotations</strong>
+          <small>Annotate brainrot terms directly on the page with hover tooltips instead of only using the floating bubble.</small>
+        </span>
+        <input id="enableInlineAnnotation" type="checkbox" />
+      </label>
+
+      <div class="button-row settings-action-row">
+        <button id="showTutorialButton" class="ghost-button" type="button">Show Tutorial</button>
+      </div>
     </section>
 
     <section class="panel">
@@ -166,6 +261,9 @@
       </div>
     </section>
 
+      </section>
+
+      <section id="historyGlossaryView" class="tab-panel" role="tabpanel" aria-labelledby="tabHistoryGlossary" data-tab-panel="history-glossary" hidden>
     <section class="panel">
       <div class="panel-heading">
         <div>
@@ -190,16 +288,16 @@
         </div>
       </div>
 
-      <div class="stat-top-term-banner" id="statTopTermBanner" style="display: none; margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.22); font-size: 13px; text-align: center; color: #fcd34d;">
-        Top Term: <strong id="statTopTermName" style="color: #fff;">-</strong> (<span id="statTopTermCount">0</span> times)
+      <div class="stat-top-term-banner" id="statTopTermBanner">
+        Top Term: <strong id="statTopTermName">-</strong> (<span id="statTopTermCount">0</span> times)
       </div>
 
-      <div class="panel-sub-heading" style="margin-top: 16px; margin-bottom: 8px;">
-        <h3 style="margin: 0; font-size: 14px; color: #93c5fd; text-transform: uppercase; letter-spacing: 0.05em;">Top Slang Frequency</h3>
+      <div class="panel-sub-heading">
+        <h3>Top Slang Frequency</h3>
       </div>
       
-      <div id="frequencyStatus" class="frequency-status" aria-live="polite" style="font-size: 12px; color: #94a3b8;">Click refresh to load stats.</div>
-      <div id="barChartContainer" class="bar-chart-container" style="margin-top: 10px; display: grid; gap: 8px;"></div>
+      <div id="frequencyStatus" class="frequency-status" aria-live="polite">Click refresh to load stats.</div>
+      <div id="barChartContainer" class="bar-chart-container"></div>
     </section>
 
     <section class="panel">
@@ -208,16 +306,25 @@
           <p class="panel-kicker">History</p>
           <h2>Translation Log</h2>
         </div>
-        <button id="clearHistoryButton" class="ghost-button" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.2); background: rgba(239, 68, 68, 0.08);" type="button">Clear</button>
+        <button id="clearHistoryButton" class="ghost-button danger-button" type="button">Clear</button>
       </div>
 
-      <div class="history-controls" style="display: flex; gap: 8px; margin-bottom: 12px;">
-        <button id="exportJsonButton" class="ghost-button" style="flex: 1; padding: 8px 10px; font-size: 12px;" type="button">Export JSON</button>
-        <button id="exportCsvButton" class="ghost-button" style="flex: 1; padding: 8px 10px; font-size: 12px;" type="button">Export CSV</button>
+      <div class="history-controls">
+        <button id="exportJsonButton" class="ghost-button history-action-button" type="button">Export JSON</button>
+        <button id="exportCsvButton" class="ghost-button history-action-button" type="button">Export CSV</button>
       </div>
 
-      <div id="historyListContainer" class="history-list-container" style="max-height: 280px; overflow-y: auto; display: grid; gap: 8px; padding-right: 2px;">
-        <p class="history-empty" style="text-align: center; color: #94a3b8; font-size: 13px; margin: 12px 0;">No history entries found.</p>
+      <div class="history-filter-controls">
+        <input id="historySearchInput" type="search" placeholder="Search history..." />
+        <select id="historyTypeFilter">
+          <option value="all">All</option>
+          <option value="text">Text Only</option>
+          <option value="image">Image Only</option>
+        </select>
+      </div>
+
+      <div id="historyListContainer" class="history-list-container">
+        <p class="history-empty">No history entries found.</p>
       </div>
     </section>
 
@@ -229,22 +336,30 @@
         </div>
       </div>
 
-      <form id="dictionaryForm" style="display: grid; gap: 10px; margin-bottom: 14px;">
+      <form id="dictionaryForm" class="dictionary-form">
         <label class="field">
           <span>Slang Term</span>
-          <input id="dictTermInput" type="text" placeholder="e.g. rizzler" required style="padding: 10px 12px; font-size: 13px;" />
+          <input id="dictTermInput" class="dictionary-input" type="text" placeholder="e.g. rizzler" required />
         </label>
         <label class="field">
           <span>Meaning / Translation</span>
-          <input id="dictMeaningInput" type="text" placeholder="e.g. someone with great charisma" required style="padding: 10px 12px; font-size: 13px;" />
+          <input id="dictMeaningInput" class="dictionary-input" type="text" placeholder="e.g. someone with great charisma" required />
         </label>
-        <button type="submit" class="primary-button" style="width: 100%; min-height: 38px; padding: 8px 14px; font-size: 13px; margin-top: 4px;">Add Term</button>
+        <button type="submit" class="primary-button dictionary-submit">Add Term</button>
       </form>
 
-      <div id="dictionaryListContainer" style="max-height: 220px; overflow-y: auto;">
-        <ul id="dictionaryList" style="list-style: none; padding: 0; margin: 0; display: grid; gap: 8px;"></ul>
+      <div class="dictionary-transfer-controls">
+        <button id="exportDictButton" class="ghost-button" type="button">Export Dictionary</button>
+        <button id="importDictButton" class="ghost-button" type="button">Import Dictionary</button>
+        <input id="importDictFile" class="file-input-hidden" type="file" accept=".json,.csv" />
+      </div>
+
+      <div id="dictionaryListContainer" class="dictionary-list-container">
+        <ul id="dictionaryList" class="dictionary-list"></ul>
       </div>
     </section>
+      </section>
+    </div>
   </main>
 
   <script src="popup.js"></script>

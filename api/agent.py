@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -12,8 +13,11 @@ from .config import Settings
 from .schemas import (
     HighlightedTextAnalysisResponse,
     ImageAnalysisResponse,
+    ReverseTranslateResponse,
 )
 
+
+logger = logging.getLogger(__name__)
 
 REFERENCE_FOCUS_TERMS = (
     "based",
@@ -164,6 +168,15 @@ class BrainrotAgent:
             "When the text is not brainrot, set is_brainrot to false and still provide the safest equivalent_text possible."
         )
 
+    def _build_reverse_system_prompt(self) -> str:
+        return (
+            "You are a structured Gen Z and internet-slang rewrite engine.\n"
+            "Convert normal English into natural brainrot or Gen Z internet English without adding unrelated facts.\n"
+            "Keep the user's core meaning, tone, and intent. Prefer current slang only when it fits.\n"
+            "Return JSON only with reverse_text, confidence_score, and model_used.\n"
+            "Keep reverse_text concise and readable, not an overloaded list of slang terms."
+        )
+
     def _build_text_user_prompt(
         self,
         *,
@@ -293,20 +306,89 @@ class BrainrotAgent:
         ]
         if matches:
             equivalent = "; ".join(f'{entry["term"]}: {entry["meaning"]}' for entry in matches[:3])
-            return HighlightedTextAnalysisResponse.safe_fallback(
-                original_text=selected_text,
-                equivalent_text=f"Mock glossary fallback: {equivalent}",
+            return HighlightedTextAnalysisResponse(
+                is_brainrot=True,
+                brainrot_text=selected_text,
+                equivalent_text=f"Possible meaning: {equivalent}",
+                formal_explanation="Matched from the local slang glossary while live model analysis was unavailable.",
+                sentiment_label="unclear",
+                sentiment_rationale="Sentiment was not analyzed because live model analysis was unavailable.",
                 confidence_score=0.35,
                 flagged_for_review=True,
                 model_used="mock_glossary_fallback",
             )
         return HighlightedTextAnalysisResponse.safe_fallback(
             original_text=selected_text,
-            equivalent_text=f"Mock fallback: {selected_text}",
+            equivalent_text=selected_text,
             confidence_score=0.15,
             flagged_for_review=True,
             model_used="mock_glossary_fallback",
         )
+
+    def _heuristic_reverse_fallback(self, text: str) -> ReverseTranslateResponse:
+        cleaned = text.strip()
+        lowered = cleaned.casefold()
+        replacements = (
+            (r"\bhe is very charming\b", "bro got mad rizz"),
+            (r"\bhe is charming\b", "bro got rizz"),
+            (r"\bvery charming\b", "got mad rizz"),
+            (r"\bcharming\b", "got rizz"),
+            (r"\bexcellent\b", "goated"),
+            (r"\bvery good\b", "lowkey goated"),
+            (r"\bgood\b", "valid"),
+            (r"\bbad\b", "mid"),
+            (r"\bembarrassing\b", "caught lacking"),
+            (r"\bmaking a mistake\b", "having a skill issue"),
+            (r"\bcalm down\b", "touch grass"),
+        )
+        reverse_text = cleaned
+        for pattern, replacement in replacements:
+            reverse_text = re.sub(pattern, replacement, reverse_text, flags=re.IGNORECASE)
+
+        if reverse_text.casefold() == lowered and lowered.startswith("he is "):
+            reverse_text = "bro is " + cleaned[6:]
+        elif reverse_text.casefold() == lowered and lowered.startswith("she is "):
+            reverse_text = "she lowkey " + cleaned[7:]
+
+        return ReverseTranslateResponse(
+            reverse_text=reverse_text or cleaned,
+            confidence_score=0.35 if reverse_text.casefold() != lowered else 0.2,
+            model_used="heuristic_reverse_fallback",
+        )
+
+    async def reverse_translate(self, text: str) -> ReverseTranslateResponse:
+        cleaned = text.strip()
+        payload = {
+            "model": self.settings.openrouter_text_model,
+            "messages": [
+                {"role": "system", "content": self._build_reverse_system_prompt()},
+                {
+                    "role": "user",
+                    "content": f'Convert this normal English into brainrot English: "{cleaned}"',
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "reverse_translate_response",
+                    "strict": True,
+                    "schema": ReverseTranslateResponse.model_json_schema(),
+                },
+            },
+            "temperature": 0.35,
+        }
+
+        try:
+            parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=8.0)
+            result = ReverseTranslateResponse.model_validate(parsed)
+            return ReverseTranslateResponse(
+                reverse_text=_trim_text(result.reverse_text) or cleaned,
+                confidence_score=max(0.0, min(1.0, float(result.confidence_score))),
+                model_used=result.model_used or self.settings.openrouter_text_model,
+            )
+        except Exception:
+            logger.exception("Reverse translation model failed for text=%r", cleaned[:120])
+            return self._heuristic_reverse_fallback(cleaned)
 
     async def analyze_highlighted_text(
         self,
@@ -355,6 +437,7 @@ class BrainrotAgent:
         except httpx.TimeoutException:
             return self._heuristic_text_fallback(selected_text)
         except Exception:
+            logger.exception("Text analysis model failed for selected_text=%r", selected_text[:120])
             return self._heuristic_text_fallback(selected_text)
 
     async def _call_image_model(
@@ -444,7 +527,7 @@ class BrainrotAgent:
                 used_frame_fallback=False,
             )
         except Exception:
-            pass
+            logger.exception("Primary vision model failed for source_url=%s", source_url)
 
         if frame0_base64 and frame0_media_type:
             for model in self.settings.openrouter_vision_fallback_models:
@@ -466,6 +549,11 @@ class BrainrotAgent:
                         used_frame_fallback=True,
                     )
                 except Exception:
+                    logger.warning(
+                        "Vision fallback model %s failed, trying next",
+                        model,
+                        exc_info=True,
+                    )
                     continue
 
         return ImageAnalysisResponse.safe_fallback(

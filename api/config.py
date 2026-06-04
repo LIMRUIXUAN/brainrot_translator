@@ -43,6 +43,7 @@ class Settings:
     openrouter_app_title: str
     low_confidence_threshold: float
     max_image_bytes: int
+    cache_ttl_hours: int
     enable_local_translation_stub: bool
     extension_api_base_url: str
 
@@ -77,6 +78,7 @@ def get_settings() -> Settings:
             (os.getenv("BRAINROT_LOW_CONFIDENCE_THRESHOLD") or "0.7").strip()
         ),
         max_image_bytes=int((os.getenv("BRAINROT_MAX_IMAGE_BYTES") or str(5 * 1024 * 1024)).strip()),
+        cache_ttl_hours=int((os.getenv("BRAINROT_CACHE_TTL_HOURS") or "168").strip()),
         enable_local_translation_stub=_env_flag(
             "ENABLE_LOCAL_TRANSLATION_STUB",
             True,

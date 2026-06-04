@@ -1,5 +1,6 @@
 (function () {
   const DEFAULT_API_BASE = "http://127.0.0.1:8000";
+  const MAX_HISTORY_ENTRIES = 200;
   const DEFAULT_SETTINGS = Object.freeze({
     brainrotApiBaseUrl: DEFAULT_API_BASE,
     brainrotEnableTextSelection: true,
@@ -7,10 +8,14 @@
     brainrotEnableHoverDetection: true,
     brainrotEnableLauncher: true,
     brainrotEnableClipboardPaste: true,
+    brainrotEnableInlineAnnotation: false,
     brainrotLauncherPosition: null
   });
 
   const elements = {};
+  const ONBOARDING_STEP_COUNT = 4;
+  const SIDE_PANEL_TABS = ["translate-scan", "history-glossary", "settings-status"];
+  let onboardingStepIndex = 0;
 
   function normalizeSettings(rawSettings) {
     const raw = rawSettings || {};
@@ -41,6 +46,10 @@
         typeof raw.brainrotEnableClipboardPaste === "boolean"
           ? raw.brainrotEnableClipboardPaste
           : DEFAULT_SETTINGS.brainrotEnableClipboardPaste,
+      brainrotEnableInlineAnnotation:
+        typeof raw.brainrotEnableInlineAnnotation === "boolean"
+          ? raw.brainrotEnableInlineAnnotation
+          : DEFAULT_SETTINGS.brainrotEnableInlineAnnotation,
       brainrotLauncherPosition:
         raw.brainrotLauncherPosition &&
         Number.isFinite(raw.brainrotLauncherPosition.left) &&
@@ -91,7 +100,8 @@
       brainrotConfirmTextSelection: elements.confirmTextSelection.checked,
       brainrotEnableHoverDetection: elements.enableHoverDetection.checked,
       brainrotEnableLauncher: elements.enableLauncher.checked,
-      brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked
+      brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked,
+      brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked
     });
   }
 
@@ -102,6 +112,87 @@
     elements.enableHoverDetection.checked = settings.brainrotEnableHoverDetection;
     elements.enableLauncher.checked = settings.brainrotEnableLauncher;
     elements.enableClipboardPaste.checked = settings.brainrotEnableClipboardPaste;
+    elements.enableInlineAnnotation.checked = settings.brainrotEnableInlineAnnotation;
+  }
+
+  function activateSidepanelTab(tabId, { persist = true } = {}) {
+    const activeTabId = SIDE_PANEL_TABS.includes(tabId) ? tabId : SIDE_PANEL_TABS[0];
+
+    elements.sidepanelTabs?.forEach((button) => {
+      const isActive = button.dataset.tabTarget === activeTabId;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-selected", String(isActive));
+      button.tabIndex = isActive ? 0 : -1;
+    });
+
+    elements.sidepanelPanels?.forEach((panel) => {
+      const isActive = panel.dataset.tabPanel === activeTabId;
+      panel.classList.toggle("is-active", isActive);
+      panel.hidden = !isActive;
+    });
+
+    if (persist) {
+      chrome.storage.local.set({ brainrotSidepanelActiveTab: activeTabId });
+    }
+  }
+
+  async function restoreSidepanelTab() {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotSidepanelActiveTab: SIDE_PANEL_TABS[0] }, resolve);
+    });
+    activateSidepanelTab(result.brainrotSidepanelActiveTab, { persist: false });
+  }
+
+  function focusAdjacentSidepanelTab(direction) {
+    if (!elements.sidepanelTabs?.length) {
+      return;
+    }
+    const currentIndex = elements.sidepanelTabs.findIndex((button) => button.classList.contains("is-active"));
+    const nextIndex = (currentIndex + direction + elements.sidepanelTabs.length) % elements.sidepanelTabs.length;
+    const nextButton = elements.sidepanelTabs[nextIndex];
+    activateSidepanelTab(nextButton.dataset.tabTarget);
+    nextButton.focus();
+  }
+
+  function renderOnboardingStep() {
+    document.querySelectorAll(".onboarding-step").forEach((step, index) => {
+      step.classList.toggle("is-active", index === onboardingStepIndex);
+    });
+
+    if (elements.onboardingDots) {
+      elements.onboardingDots.innerHTML = Array.from({ length: ONBOARDING_STEP_COUNT }, (_, index) => (
+        `<button class="onboarding-dot${index === onboardingStepIndex ? " is-active" : ""}" type="button" data-step="${index}" aria-label="Go to tutorial step ${index + 1}"></button>`
+      )).join("");
+    }
+
+    const isLastStep = onboardingStepIndex === ONBOARDING_STEP_COUNT - 1;
+    if (elements.onboardingNextButton) elements.onboardingNextButton.hidden = isLastStep;
+    if (elements.onboardingStartButton) elements.onboardingStartButton.hidden = !isLastStep;
+  }
+
+  function showOnboarding() {
+    onboardingStepIndex = 0;
+    if (elements.onboardingDontShow) elements.onboardingDontShow.checked = false;
+    if (elements.onboardingOverlay) elements.onboardingOverlay.hidden = false;
+    renderOnboardingStep();
+  }
+
+  async function hideOnboarding({ markComplete = true } = {}) {
+    if (markComplete) {
+      await new Promise((resolve) => {
+        chrome.storage.local.set({ brainrotOnboardingComplete: true }, resolve);
+      });
+    }
+    if (elements.onboardingOverlay) elements.onboardingOverlay.hidden = true;
+  }
+
+  async function maybeShowOnboarding() {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotOnboardingComplete: false }, resolve);
+    });
+    if (!result.brainrotOnboardingComplete) {
+      showOnboarding();
+    }
   }
 
   function setHealthCard(card, valueNode, hintNode, status, hint, tone) {
@@ -118,8 +209,8 @@
     const localModelAvailable = Boolean(payload.local_text_model_available);
     const qualityClassifierLoaded = Boolean(payload.local_quality_classifier_loaded);
     const qualityClassifierAvailable = Boolean(payload.local_quality_classifier_available);
-    let modelStatus = "Fallback";
-    let modelHint = "Text uses glossary fallback; image/GIF still requires OpenRouter.";
+    let modelStatus = "Glossary";
+    let modelHint = "Text uses the local glossary; image/GIF still requires OpenRouter.";
     let modelTone = "warn";
 
     if (localModelLoaded) {
@@ -139,7 +230,7 @@
       modelTone = "ok";
     } else if (payload.openrouter_configured) {
       modelStatus = "OpenRouter";
-      modelHint = "Text fallback and image/GIF analysis can use OpenRouter.";
+      modelHint = "Text and image/GIF analysis can use OpenRouter.";
       modelTone = "ok";
     }
 
@@ -222,7 +313,7 @@
     if (!container) return;
 
     if (!Array.isArray(items) || items.length === 0) {
-      container.innerHTML = `<p style="text-align: center; color: #94a3b8; font-size: 13px; margin: 12px 0;">No slang terms recorded yet.</p>`;
+      container.innerHTML = `<p class="empty-state">No slang terms recorded yet.</p>`;
       setFrequencyStatus("No terms logged.", null);
       return;
     }
@@ -310,7 +401,69 @@
   }
 
   /* ── Phase 3: Translation History Manager ───────────────────── */
-  async function renderHistory() {
+  function renderHistoryEntry(entry) {
+    const isImage = entry.type === "image";
+    const date = entry.timestamp ? new Date(entry.timestamp) : new Date();
+    const dateStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const fullOriginal = normalizeHistoryText(entry.original || "");
+    const fullSourceUrl = normalizeHistoryText(entry.source_url || "");
+    const fullTranslation = normalizeHistoryText(entry.translation || "");
+    const original = escapeHtml(summarizeHistoryOriginal(entry, isImage));
+    const translation = escapeHtml(truncateHistoryText(fullTranslation, 160));
+    const sentiment = escapeHtml(entry.sentiment || "unclear");
+    const confidence = Math.round((entry.confidence || 0) * 100);
+    const originalTitle = escapeHtml(isImage && fullSourceUrl ? fullSourceUrl : fullOriginal);
+    const translationTitle = escapeHtml(fullTranslation);
+    const badgeClass = isImage ? "history-type-badge is-image" : "history-type-badge";
+    const typeLabel = isImage ? "Image" : "Text";
+
+    return `
+      <div class="history-entry">
+        <div class="history-header">
+          <span class="history-time">${dateStr}</span>
+          <span class="${badgeClass}">${typeLabel}</span>
+        </div>
+        <div class="history-content">
+          <div class="history-original" title="${originalTitle}">"${original}"</div>
+          <div class="history-arrow">⟶</div>
+          <div class="history-translation" title="${translationTitle}">${translation}</div>
+        </div>
+        <div class="history-meta">
+          <span class="history-chip">Sentiment: ${sentiment}</span>
+          <span class="history-chip">Confidence: ${confidence}%</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function getHistoryFilters() {
+    return {
+      query: elements.historySearchInput?.value || "",
+      typeFilter: elements.historyTypeFilter?.value || "all"
+    };
+  }
+
+  function filterHistoryEntries(history, options) {
+    const query = normalizeHistoryText(options?.query || "").toLowerCase();
+    const typeFilter = options?.typeFilter || "all";
+
+    return history.filter((entry) => {
+      if (typeFilter !== "all" && entry.type !== typeFilter) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      const haystack = [
+        entry.original,
+        entry.translation,
+        entry.page_title
+      ].map((value) => normalizeHistoryText(value).toLowerCase()).join(" ");
+      return haystack.includes(query);
+    });
+  }
+
+  async function renderHistory(options = getHistoryFilters()) {
     const result = await new Promise((resolve) => {
       chrome.storage.local.get({ brainrotHistory: [] }, resolve);
     });
@@ -319,45 +472,122 @@
     if (!container) return;
 
     if (history.length === 0) {
-      container.innerHTML = `<p class="history-empty" style="text-align: center; color: #94a3b8; font-size: 13px; margin: 12px 0;">No history entries found.</p>`;
+      container.innerHTML = `<p class="history-empty">No history entries found.</p>`;
       return;
     }
 
-    container.innerHTML = history.map((entry) => {
-      const isImage = entry.type === "image";
-      const date = entry.timestamp ? new Date(entry.timestamp) : new Date();
-      const dateStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const fullOriginal = normalizeHistoryText(entry.original || "");
-      const fullSourceUrl = normalizeHistoryText(entry.source_url || "");
-      const fullTranslation = normalizeHistoryText(entry.translation || "");
-      const original = escapeHtml(summarizeHistoryOriginal(entry, isImage));
-      const translation = escapeHtml(truncateHistoryText(fullTranslation, 160));
-      const sentiment = escapeHtml(entry.sentiment || "unclear");
-      const confidence = Math.round((entry.confidence || 0) * 100);
-      const originalTitle = escapeHtml(isImage && fullSourceUrl ? fullSourceUrl : fullOriginal);
-      const translationTitle = escapeHtml(fullTranslation);
-      
-      const badgeClass = isImage ? "history-type-badge is-image" : "history-type-badge";
-      const typeLabel = isImage ? "Image" : "Text";
+    const filteredHistory = filterHistoryEntries(history, options);
+    if (filteredHistory.length === 0) {
+      container.innerHTML = `<p class="history-empty">No matching entries.</p>`;
+      return;
+    }
 
-      return `
-        <div class="history-entry">
-          <div class="history-header">
-            <span class="history-time">${dateStr}</span>
-            <span class="${badgeClass}">${typeLabel}</span>
-          </div>
-          <div class="history-content">
-            <div class="history-original" title="${originalTitle}">"${original}"</div>
-            <div class="history-arrow">⟶</div>
-            <div class="history-translation" title="${translationTitle}">${translation}</div>
-          </div>
-          <div class="history-meta">
-            <span class="history-chip">Sentiment: ${sentiment}</span>
-            <span class="history-chip">Confidence: ${confidence}%</span>
-          </div>
-        </div>
-      `;
-    }).join("");
+    container.innerHTML = filteredHistory.map(renderHistoryEntry).join("");
+  }
+
+  async function saveHistoryEntry(entry) {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotHistory: [] }, resolve);
+    });
+    const history = Array.isArray(result.brainrotHistory) ? result.brainrotHistory : [];
+    history.unshift({
+      timestamp: new Date().toISOString(),
+      type: "text",
+      ...entry
+    });
+    if (history.length > MAX_HISTORY_ENTRIES) {
+      history.length = MAX_HISTORY_ENTRIES;
+    }
+    await new Promise((resolve) => {
+      chrome.storage.local.set({ brainrotHistory: history }, resolve);
+    });
+  }
+
+  function setDirectTranslateResult(message, tone) {
+    if (!elements.directTranslateResult) {
+      return;
+    }
+    elements.directTranslateResult.innerHTML = message
+      ? `<p class="direct-translate-status${tone ? ` is-${tone}` : ""}">${escapeHtml(message)}</p>`
+      : "";
+  }
+
+  function renderDirectTranslateCard(entry) {
+    if (!elements.directTranslateResult) {
+      return;
+    }
+    elements.directTranslateResult.innerHTML = renderHistoryEntry(entry);
+  }
+
+  async function directTranslate() {
+    const inputValue = elements.directTranslateInput?.value.trim() || "";
+    if (!inputValue) {
+      setDirectTranslateResult("Enter text to translate.", "error");
+      return;
+    }
+
+    const settings = await getStoredSettings();
+    if (!isValidApiBaseUrl(settings.brainrotApiBaseUrl)) {
+      setDirectTranslateResult("API Base URL must be a valid http or https address.", "error");
+      return;
+    }
+
+    const button = elements.directTranslateButton;
+    const previousLabel = button?.textContent || "Translate";
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Translating...";
+    }
+    setDirectTranslateResult("Translating...", null);
+
+    try {
+      const direction = elements.translateDirection?.value === "to-brainrot" ? "to-brainrot" : "to-english";
+      const endpoint = direction === "to-brainrot"
+        ? "/api/v1/reverse-translate"
+        : "/api/v1/analyze-highlighted-text";
+      const requestBody = direction === "to-brainrot"
+        ? { text: inputValue, page_url: "sidepanel-direct-input" }
+        : { selected_text: inputValue, page_url: "sidepanel-direct-input" };
+
+      const response = await fetch(`${settings.brainrotApiBaseUrl}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody)
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.detail || payload.error || "Backend request failed.");
+      }
+
+      const translation = direction === "to-brainrot"
+        ? payload.reverse_text || inputValue
+        : payload.equivalent_text || payload.formal_explanation || inputValue;
+      const entry = {
+        timestamp: new Date().toISOString(),
+        type: "text",
+        original: inputValue,
+        translation,
+        sentiment: payload.sentiment_label || "unclear",
+        confidence: payload.confidence_score || 0,
+        page_url: "sidepanel-direct-input",
+        page_title: direction === "to-brainrot"
+          ? "Side Panel Reverse Translation"
+          : "Side Panel Direct Input"
+      };
+      renderDirectTranslateCard(entry);
+      await saveHistoryEntry(entry);
+      await renderHistory();
+    } catch (error) {
+      setDirectTranslateResult(
+        error instanceof Error ? error.message : "Unable to reach the backend.",
+        "error"
+      );
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = previousLabel;
+      }
+    }
   }
 
   async function clearHistory() {
@@ -424,6 +654,137 @@
   }
 
   /* ── Phase 8: Custom dictionary / User glossary ────────────── */
+  function parseDictionaryCsv(text) {
+    const rows = [];
+    let row = [];
+    let cell = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i += 1) {
+      const char = text[i];
+      const next = text[i + 1];
+      if (char === '"' && inQuotes && next === '"') {
+        cell += '"';
+        i += 1;
+      } else if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === "," && !inQuotes) {
+        row.push(cell.trim());
+        cell = "";
+      } else if ((char === "\n" || char === "\r") && !inQuotes) {
+        if (char === "\r" && next === "\n") i += 1;
+        row.push(cell.trim());
+        if (row.some(Boolean)) rows.push(row);
+        row = [];
+        cell = "";
+      } else {
+        cell += char;
+      }
+    }
+
+    row.push(cell.trim());
+    if (row.some(Boolean)) rows.push(row);
+    return rows;
+  }
+
+  function normalizeDictionaryEntries(entries) {
+    if (!Array.isArray(entries)) {
+      throw new Error("Dictionary file must contain an array of terms.");
+    }
+
+    const normalized = [];
+    for (const entry of entries) {
+      const term = String(entry?.term ?? entry?.Term ?? "").trim();
+      const meaning = String(entry?.meaning ?? entry?.Meaning ?? entry?.translation ?? "").trim();
+      if (term && meaning) {
+        normalized.push({ term, meaning });
+      }
+    }
+    if (normalized.length === 0) {
+      throw new Error("No valid dictionary entries found. Use term and meaning columns.");
+    }
+    return normalized;
+  }
+
+  async function exportDictionary() {
+    const result = await new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotCustomDictionary: [] }, resolve);
+    });
+    const list = Array.isArray(result.brainrotCustomDictionary) ? result.brainrotCustomDictionary : [];
+    if (list.length === 0) {
+      setNotice("No custom dictionary entries to export.", "error");
+      return;
+    }
+    triggerDownload(JSON.stringify(list, null, 2), "brainrot_dictionary.json", "application/json");
+    setNotice("Dictionary export started.", "success");
+  }
+
+  function readImportFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("Could not read dictionary file."));
+      reader.readAsText(file);
+    });
+  }
+
+  function parseDictionaryFile(file, text) {
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".json")) {
+      return normalizeDictionaryEntries(JSON.parse(text));
+    }
+    if (name.endsWith(".csv")) {
+      const rows = parseDictionaryCsv(text);
+      const hasHeader = rows[0]?.[0]?.toLowerCase() === "term";
+      const dataRows = hasHeader ? rows.slice(1) : rows;
+      return normalizeDictionaryEntries(dataRows.map((row) => ({
+        term: row[0],
+        meaning: row[1]
+      })));
+    }
+    throw new Error("Import must be a .json or .csv file.");
+  }
+
+  async function importDictionaryFile(file) {
+    if (!file) return;
+    try {
+      const text = await readImportFile(file);
+      const incoming = parseDictionaryFile(file, text);
+      const result = await new Promise((resolve) => {
+        chrome.storage.local.get({ brainrotCustomDictionary: [] }, resolve);
+      });
+      const merged = Array.isArray(result.brainrotCustomDictionary)
+        ? [...result.brainrotCustomDictionary]
+        : [];
+
+      let added = 0;
+      let updated = 0;
+      for (const entry of incoming) {
+        const lowered = entry.term.toLowerCase();
+        const existingIndex = merged.findIndex((item) => String(item.term || "").toLowerCase() === lowered);
+        if (existingIndex >= 0) {
+          merged[existingIndex] = { term: merged[existingIndex].term || entry.term, meaning: entry.meaning };
+          updated += 1;
+        } else {
+          merged.push(entry);
+          added += 1;
+        }
+      }
+
+      await new Promise((resolve) => {
+        chrome.storage.local.set({ brainrotCustomDictionary: merged }, resolve);
+      });
+      await renderDictionary();
+      setNotice(`Dictionary imported: ${added} added, ${updated} updated.`, "success");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Invalid dictionary file.", "error");
+    } finally {
+      if (elements.importDictFile) {
+        elements.importDictFile.value = "";
+      }
+    }
+  }
+
   async function renderDictionary() {
     const result = await new Promise((resolve) => {
       chrome.storage.local.get({ brainrotCustomDictionary: [] }, resolve);
@@ -433,7 +794,7 @@
     if (!container) return;
 
     if (list.length === 0) {
-      container.innerHTML = `<li style="text-align: center; color: #94a3b8; font-size: 12px; padding: 12px 0;">No custom slang terms added yet.</li>`;
+      container.innerHTML = `<li class="empty-state empty-state--compact">No custom slang terms added yet.</li>`;
       return;
     }
 
@@ -679,6 +1040,48 @@
     }
   }
 
+  async function scanActivePage() {
+    try {
+      await ensureActivePageConnection();
+      const response = await sendMessageToActiveTab({ action: "brainrotScanPage" });
+      if (!response?.ok) {
+        throw new Error("The content script did not acknowledge the scan request.");
+      }
+      setNotice("Page scan requested on the active tab.", "success");
+      renderPageStatus("Connected", "Scanning visible page text for recognized brainrot terms.", "ok");
+    } catch (error) {
+      renderPageStatus(
+        "Not available",
+        "Use a normal http or https webpage, then try scanning again.",
+        "error"
+      );
+      setNotice(error instanceof Error ? error.message : "Unable to scan the active page.", "error");
+    }
+  }
+
+  async function clearActivePageHighlights() {
+    try {
+      await ensureActivePageConnection();
+      const response = await sendMessageToActiveTab({ action: "brainrotClearPageHighlights" });
+      if (!response?.ok) {
+        throw new Error("The content script did not acknowledge the clear request.");
+      }
+      const count = Number(response.count) || 0;
+      setNotice(
+        count > 0 ? `Removed ${count} page highlight${count === 1 ? "" : "s"}.` : "No page highlights were active.",
+        "success"
+      );
+      renderPageStatus("Connected", "Inline page highlights were cleared.", "ok");
+    } catch (error) {
+      renderPageStatus(
+        "Not available",
+        "Use a normal http or https webpage, then try clearing again.",
+        "error"
+      );
+      setNotice(error instanceof Error ? error.message : "Unable to clear page highlights.", "error");
+    }
+  }
+
   async function refreshHealth(baseUrl) {
     setNotice("Checking backend health...", null);
 
@@ -737,7 +1140,8 @@
       brainrotConfirmTextSelection: elements.confirmTextSelection.checked,
       brainrotEnableHoverDetection: elements.enableHoverDetection.checked,
       brainrotEnableLauncher: elements.enableLauncher.checked,
-      brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked
+      brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked,
+      brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked
     });
     await setStoredSettings(nextSettings);
   }
@@ -749,6 +1153,7 @@
     elements.enableHoverDetection = document.getElementById("enableHoverDetection");
     elements.enableLauncher = document.getElementById("enableLauncher");
     elements.enableClipboardPaste = document.getElementById("enableClipboardPaste");
+    elements.enableInlineAnnotation = document.getElementById("enableInlineAnnotation");
     elements.saveSettingsButton = document.getElementById("saveSettingsButton");
     elements.resetDefaultsButton = document.getElementById("resetDefaultsButton");
     elements.refreshHealthButton = document.getElementById("refreshHealthButton");
@@ -767,18 +1172,39 @@
     elements.pageStatusHint = document.getElementById("pageStatusHint");
     elements.checkPageButton = document.getElementById("checkPageButton");
     elements.showTestBubbleButton = document.getElementById("showTestBubbleButton");
+    elements.scanPageButton = document.getElementById("scanPageButton");
+    elements.clearPageHighlightsButton = document.getElementById("clearPageHighlightsButton");
     elements.refreshFrequencyButton = document.getElementById("refreshStatsButton");
     elements.frequencyStatus = document.getElementById("frequencyStatus");
+    elements.directTranslateInput = document.getElementById("directTranslateInput");
+    elements.translateDirection = document.getElementById("translateDirection");
+    elements.directTranslateButton = document.getElementById("directTranslateButton");
+    elements.directTranslateResult = document.getElementById("directTranslateResult");
+    elements.onboardingOverlay = document.getElementById("onboardingOverlay");
+    elements.onboardingDots = document.getElementById("onboardingDots");
+    elements.onboardingDontShow = document.getElementById("onboardingDontShow");
+    elements.onboardingSkipButton = document.getElementById("onboardingSkipButton");
+    elements.onboardingNextButton = document.getElementById("onboardingNextButton");
+    elements.onboardingStartButton = document.getElementById("onboardingStartButton");
+    elements.showTutorialButton = document.getElementById("showTutorialButton");
     
     elements.clearHistoryButton = document.getElementById("clearHistoryButton");
     elements.exportJsonButton = document.getElementById("exportJsonButton");
     elements.exportCsvButton = document.getElementById("exportCsvButton");
+    elements.historySearchInput = document.getElementById("historySearchInput");
+    elements.historyTypeFilter = document.getElementById("historyTypeFilter");
     elements.dictionaryForm = document.getElementById("dictionaryForm");
     elements.dictTermInput = document.getElementById("dictTermInput");
     elements.dictMeaningInput = document.getElementById("dictMeaningInput");
+    elements.exportDictButton = document.getElementById("exportDictButton");
+    elements.importDictButton = document.getElementById("importDictButton");
+    elements.importDictFile = document.getElementById("importDictFile");
+    elements.sidepanelTabs = Array.from(document.querySelectorAll("[data-tab-target]"));
+    elements.sidepanelPanels = Array.from(document.querySelectorAll("[data-tab-panel]"));
 
     const currentSettings = await getStoredSettings();
     renderSettings(currentSettings);
+    await restoreSidepanelTab();
     await refreshHealth(currentSettings.brainrotApiBaseUrl);
     
     // Render History & Dictionary
@@ -788,6 +1214,7 @@
     if (elements.pageStatusCard) {
       await checkActivePage();
     }
+    await maybeShowOnboarding();
 
     elements.saveSettingsButton.addEventListener("click", () => {
       saveSettings().catch((error) => {
@@ -825,6 +1252,24 @@
         setNotice(error instanceof Error ? error.message : "Failed to show the test bubble.", "error");
       });
     });
+    elements.scanPageButton?.addEventListener("click", () => {
+      scanActivePage().catch((error) => {
+        setNotice(error instanceof Error ? error.message : "Failed to scan the active page.", "error");
+      });
+    });
+    elements.clearPageHighlightsButton?.addEventListener("click", () => {
+      clearActivePageHighlights().catch((error) => {
+        setNotice(error instanceof Error ? error.message : "Failed to clear page highlights.", "error");
+      });
+    });
+    elements.directTranslateButton?.addEventListener("click", () => {
+      directTranslate().catch((error) => {
+        setDirectTranslateResult(
+          error instanceof Error ? error.message : "Direct translation failed.",
+          "error"
+        );
+      });
+    });
 
     elements.clearHistoryButton?.addEventListener("click", () => {
       clearHistory().catch(() => undefined);
@@ -834,6 +1279,67 @@
     });
     elements.exportCsvButton?.addEventListener("click", () => {
       exportHistoryCsv().catch(() => undefined);
+    });
+    elements.exportDictButton?.addEventListener("click", () => {
+      exportDictionary().catch((error) => {
+        setNotice(error instanceof Error ? error.message : "Dictionary export failed.", "error");
+      });
+    });
+    elements.importDictButton?.addEventListener("click", () => {
+      elements.importDictFile?.click();
+    });
+    elements.importDictFile?.addEventListener("change", () => {
+      const file = elements.importDictFile.files?.[0];
+      importDictionaryFile(file).catch((error) => {
+        setNotice(error instanceof Error ? error.message : "Dictionary import failed.", "error");
+      });
+    });
+    elements.sidepanelTabs?.forEach((button) => {
+      button.addEventListener("click", () => {
+        activateSidepanelTab(button.dataset.tabTarget);
+      });
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          focusAdjacentSidepanelTab(1);
+        }
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          focusAdjacentSidepanelTab(-1);
+        }
+      });
+    });
+    elements.onboardingNextButton?.addEventListener("click", () => {
+      onboardingStepIndex = Math.min(ONBOARDING_STEP_COUNT - 1, onboardingStepIndex + 1);
+      renderOnboardingStep();
+    });
+    elements.onboardingSkipButton?.addEventListener("click", () => {
+      hideOnboarding({ markComplete: true }).catch(() => undefined);
+    });
+    elements.onboardingStartButton?.addEventListener("click", () => {
+      hideOnboarding({ markComplete: true }).catch(() => undefined);
+    });
+    elements.onboardingDots?.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.matches(".onboarding-dot")) return;
+      const nextStep = Number(target.dataset.step);
+      if (Number.isInteger(nextStep)) {
+        onboardingStepIndex = Math.max(0, Math.min(ONBOARDING_STEP_COUNT - 1, nextStep));
+        renderOnboardingStep();
+      }
+    });
+    elements.showTutorialButton?.addEventListener("click", () => {
+      showOnboarding();
+    });
+    let historySearchTimer = null;
+    elements.historySearchInput?.addEventListener("input", () => {
+      window.clearTimeout(historySearchTimer);
+      historySearchTimer = window.setTimeout(() => {
+        renderHistory().catch(() => undefined);
+      }, 300);
+    });
+    elements.historyTypeFilter?.addEventListener("change", () => {
+      renderHistory().catch(() => undefined);
     });
     
     elements.dictionaryForm?.addEventListener("submit", (e) => {
@@ -853,7 +1359,8 @@
       elements.confirmTextSelection,
       elements.enableHoverDetection,
       elements.enableLauncher,
-      elements.enableClipboardPaste
+      elements.enableClipboardPaste,
+      elements.enableInlineAnnotation
     ].forEach((checkbox) => {
       checkbox?.addEventListener("change", () => {
         saveBehaviorSettingsImmediately().catch((error) => {

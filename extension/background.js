@@ -4,6 +4,7 @@
 /* ------------------------------------------------------------------ */
 
 const MAX_HISTORY_ENTRIES = 200;
+const tabBrainrotCounts = new Map();
 
 // ── Side Panel Behavior ──────────────────────────────────────────────
 async function configureSidePanelBehavior() {
@@ -29,24 +30,43 @@ chrome.runtime.onInstalled.addListener(() => {
     title: "Translate Brainrot",
     contexts: ["selection"]
   });
+  chrome.contextMenus.create({
+    id: "brainrot-analyze-image",
+    title: "Analyze Brainrot Meme",
+    contexts: ["image"]
+  });
 });
 
 chrome.runtime.onStartup.addListener(() => {
   configureSidePanelBehavior().catch(() => undefined);
 });
 
-// ── Phase 6: Context Menu Handler ────────────────────────────────────
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== "brainrot-translate-selection") {
+function resetBadge(tabId) {
+  if (!tabId) {
     return;
   }
+  tabBrainrotCounts.delete(tabId);
+  chrome.action.setBadgeText({ text: "", tabId }).catch(() => undefined);
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabBrainrotCounts.delete(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    resetBadge(tabId);
+  }
+});
+
+function sendContextMenuMessage(tab, message) {
   if (!tab?.id) {
     return;
   }
 
   chrome.tabs.sendMessage(
     tab.id,
-    { action: "brainrotContextMenuTranslate", text: info.selectionText || "" },
+    message,
     () => {
       if (chrome.runtime.lastError) {
         // Content script not injected; try injecting first then retry
@@ -54,13 +74,31 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
         chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["pet_bubble.js", "content_script.js"] })
           .then(() => {
             setTimeout(() => {
-              chrome.tabs.sendMessage(tab.id, { action: "brainrotContextMenuTranslate", text: info.selectionText || "" });
+              chrome.tabs.sendMessage(tab.id, message);
             }, 200);
           })
           .catch(() => {});
       }
     }
   );
+}
+
+// ── Phase 6: Context Menu Handler ────────────────────────────────────
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === "brainrot-translate-selection") {
+    sendContextMenuMessage(
+      tab,
+      { action: "brainrotContextMenuTranslate", text: info.selectionText || "" }
+    );
+    return;
+  }
+
+  if (info.menuItemId === "brainrot-analyze-image") {
+    sendContextMenuMessage(
+      tab,
+      { action: "brainrotContextMenuImage", srcUrl: info.srcUrl || "" }
+    );
+  }
 });
 
 // ── Phase 7: Keyboard Shortcut Handler ───────────────────────────────
@@ -161,6 +199,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch(() => sendResponse({ ok: false }));
     return true;
+  }
+
+  if (message?.action === "brainrotIncrementBadge") {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ ok: false });
+      return false;
+    }
+    const increment = Math.max(1, Math.floor(Number(message.amount) || 1));
+    const count = (tabBrainrotCounts.get(tabId) || 0) + increment;
+    tabBrainrotCounts.set(tabId, count);
+    chrome.action.setBadgeBackgroundColor({ color: "#7c3aed", tabId }).catch(() => undefined);
+    chrome.action.setBadgeText({ text: String(count), tabId }).catch(() => undefined);
+    sendResponse({ ok: true, count });
+    return false;
   }
 
   return false;

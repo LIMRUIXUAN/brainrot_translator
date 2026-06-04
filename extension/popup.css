@@ -1,10 +1,8 @@
 :root {
   color-scheme: dark;
-  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-  background:
-    radial-gradient(circle at top left, rgba(245, 158, 11, 0.14), transparent 36%),
-    linear-gradient(180deg, #0f172a, #111827 44%, #172033);
-  color: #e2e8f0;
+  font-family: var(--bt-font-sans);
+  background: var(--bt-page-bg);
+  color: var(--bt-text-secondary);
 }
 
 * {
@@ -26,11 +24,10 @@ body {
 
 .hero-card,
 .panel {
-  border-radius: 24px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background:
-    linear-gradient(160deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96));
-  box-shadow: 0 18px 42px rgba(2, 6, 23, 0.28);
+  border-radius: var(--bt-radius-panel);
+  border: 1px solid var(--bt-border-subtle);
+  background: var(--bt-panel-bg);
+  box-shadow: var(--bt-shadow-md);
 }
 
 .hero-card {
@@ -44,14 +41,14 @@ body {
 .hero-mark {
   width: 60px;
   height: 60px;
-  border-radius: 18px;
+  border-radius: var(--bt-radius-xl);
   display: grid;
   place-items: center;
   font-size: 28px;
   background:
-    radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.26), transparent 28%),
-    linear-gradient(160deg, #f59e0b, #f97316);
-  color: #111827;
+    radial-gradient(circle at 30% 25%, var(--bt-highlight-gloss), transparent 28%),
+    linear-gradient(160deg, var(--bt-accent-primary), var(--bt-accent-primary-alt));
+  color: var(--bt-text-inverse);
 }
 
 .hero-kicker,
@@ -61,19 +58,19 @@ body {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #fcd34d;
+  color: var(--bt-warning-text);
 }
 
 .hero-card h1,
 .panel h2 {
   margin: 4px 0 0;
   font-size: 20px;
-  color: #f8fafc;
+  color: var(--bt-text-primary);
 }
 
 .hero-copy {
   margin: 8px 0 0;
-  color: #cbd5e1;
+  color: var(--bt-text-secondary);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -98,21 +95,21 @@ body {
 .field span {
   font-size: 12px;
   font-weight: 700;
-  color: #cbd5e1;
+  color: var(--bt-text-secondary);
 }
 
 .field input {
   width: 100%;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 16px;
+  border: 1px solid var(--bt-border-muted);
+  border-radius: var(--bt-radius-lg);
   padding: 12px 14px;
-  background: rgba(15, 23, 42, 0.72);
-  color: #f8fafc;
+  background: var(--bt-input-bg);
+  color: var(--bt-text-primary);
   font: inherit;
 }
 
 .field input:focus {
-  outline: 2px solid rgba(56, 189, 248, 0.4);
+  outline: 2px solid var(--bt-focus-ring);
   outline-offset: 1px;
 }
 
@@ -124,7 +121,7 @@ body {
 
 .primary-button,
 .ghost-button {
-  border-radius: 999px;
+  border-radius: var(--bt-radius-pill);
   padding: 10px 14px;
   cursor: pointer;
   font: inherit;
@@ -134,29 +131,29 @@ body {
 
 .primary-button {
   border: 0;
-  background: #f59e0b;
-  color: #111827;
+  background: var(--bt-accent-primary);
+  color: var(--bt-text-inverse);
 }
 
 .ghost-button {
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(148, 163, 184, 0.12);
-  color: #e2e8f0;
+  border: 1px solid var(--bt-border-muted);
+  background: var(--bt-muted-bg);
+  color: var(--bt-text-secondary);
 }
 
 .notice {
   min-height: 18px;
   margin: 10px 0 0;
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--bt-text-secondary);
 }
 
 .notice.is-success {
-  color: #86efac;
+  color: var(--bt-success-text);
 }
 
 .notice.is-error {
-  color: #fca5a5;
+  color: var(--bt-danger-text);
 }
 
 .toggle-row {
@@ -168,26 +165,26 @@ body {
 }
 
 .toggle-row + .toggle-row {
-  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  border-top: 1px solid var(--bt-border-subtle);
 }
 
 .toggle-row strong {
   display: block;
-  color: #f8fafc;
+  color: var(--bt-text-primary);
   font-size: 14px;
 }
 
 .toggle-row small {
   display: block;
   margin-top: 4px;
-  color: #94a3b8;
+  color: var(--bt-text-muted);
   line-height: 1.45;
 }
 
 .toggle-row input[type="checkbox"] {
   width: 18px;
   height: 18px;
-  accent-color: #14b8a6;
+  accent-color: var(--bt-accent-teal);
 }
 
 .health-grid {
@@ -196,25 +193,25 @@ body {
 }
 
 .health-card {
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: var(--bt-radius-xl);
+  border: 1px solid var(--bt-border-subtle);
   padding: 14px;
-  background: rgba(15, 23, 42, 0.5);
+  background: var(--bt-card-bg);
 }
 
 .health-card.is-ok {
-  border-color: rgba(20, 184, 166, 0.3);
-  background: rgba(20, 184, 166, 0.08);
+  border-color: var(--bt-accent-teal-border);
+  background: var(--bt-accent-teal-soft);
 }
 
 .health-card.is-warn {
-  border-color: rgba(245, 158, 11, 0.3);
-  background: rgba(245, 158, 11, 0.08);
+  border-color: var(--bt-warning-border);
+  background: var(--bt-warning-soft);
 }
 
 .health-card.is-error {
-  border-color: rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.08);
+  border-color: var(--bt-danger-border);
+  background: var(--bt-danger-soft);
 }
 
 .health-label {
@@ -223,18 +220,18 @@ body {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #93c5fd;
+  color: var(--bt-accent-cool);
 }
 
 .health-card strong {
   display: block;
-  color: #f8fafc;
+  color: var(--bt-text-primary);
   font-size: 16px;
 }
 
 .health-card small {
   display: block;
   margin-top: 6px;
-  color: #cbd5e1;
+  color: var(--bt-text-secondary);
   line-height: 1.45;
 }

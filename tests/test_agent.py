@@ -27,8 +27,12 @@ class BrainrotAgentTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await self.agent.analyze_highlighted_text("skill issue")
 
+        self.assertTrue(result.is_brainrot)
         self.assertTrue(result.flagged_for_review)
-        self.assertIn("mock", (result.equivalent_text or "").lower())
+        equivalent = (result.equivalent_text or "").lower()
+        self.assertIn("possible meaning", equivalent)
+        self.assertNotIn("mock", equivalent)
+        self.assertNotIn("fallback", equivalent)
 
     async def test_image_timeout_returns_safe_fallback(self) -> None:
         with patch.object(
