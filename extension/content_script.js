@@ -98,6 +98,140 @@ if (!window.__brainrotContentScriptLoaded) {
     return null;
   }
 
+  /* ── Offline Mode Fallback Glossary ─────────────────────────── */
+  let offlineGlossary = [];
+
+  function loadOfflineGlossary() {
+    if (!hasLiveExtensionContext()) return;
+    try {
+      chrome.storage.local.get({ brainrotOfflineGlossary: [] }, (result) => {
+        if (getChromeLastError()) return;
+        offlineGlossary = Array.isArray(result.brainrotOfflineGlossary)
+          ? result.brainrotOfflineGlossary : [];
+      });
+    } catch (e) {
+      markExtensionContextInvalidated(e);
+    }
+  }
+
+  function translateTextOffline(text) {
+    const cleaned = text.trim();
+    if (!cleaned) {
+      return {
+        is_brainrot: false,
+        brainrot_text: null,
+        equivalent_text: "",
+        formal_explanation: "Empty text.",
+        sentiment_label: "unclear",
+        confidence_score: 0.0,
+        flagged_for_review: false,
+        model_used: "client_offline_glossary"
+      };
+    }
+
+    const lowered = cleaned.toLowerCase();
+    
+    // First, check exact match (case-insensitive)
+    const exactMatches = offlineGlossary.filter(
+      (entry) => String(entry.term || "").toLowerCase().trim() === lowered
+    );
+    if (exactMatches.length > 0) {
+      const match = exactMatches[0];
+      return {
+        is_brainrot: true,
+        brainrot_text: match.term,
+        equivalent_text: match.meaning,
+        formal_explanation: `Matched exact term "${match.term}" offline.`,
+        sentiment_label: "neutral",
+        confidence_score: 0.8,
+        flagged_for_review: false,
+        model_used: "client_offline_glossary"
+      };
+    }
+
+    // Substring lookup matching Python logic
+    const matched = [];
+    const sortedGlossary = [...offlineGlossary].sort((a, b) => {
+      return String(b.term || "").length - String(a.term || "").length;
+    });
+
+    for (const entry of sortedGlossary) {
+      const term = String(entry.term || "").trim();
+      const meaning = String(entry.meaning || "").trim();
+      if (!term || !meaning) continue;
+      const normalizedTerm = term.toLowerCase();
+      if (normalizedTerm.length < 2) continue;
+
+      try {
+        const pattern = new RegExp(`(?<!\\w)${escapeRegExp(normalizedTerm)}(?!\\w)`, "i");
+        if (pattern.test(lowered)) {
+          matched.push({ term, meaning });
+        }
+      } catch (e) {
+        const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "i");
+        if (pattern.test(lowered)) {
+          matched.push({ term, meaning });
+        }
+      }
+    }
+
+    if (matched.length > 0) {
+      let normal = cleaned;
+      if (matched.length === 1 && matched[0].term.toLowerCase().trim() === lowered) {
+        normal = matched[0].meaning;
+      } else {
+        let substituted = cleaned;
+        const termsExplained = [];
+
+        for (const entry of sortedGlossary) {
+          const term = String(entry.term || "").trim();
+          const meaning = String(entry.meaning || "").trim();
+          if (!term || !meaning) continue;
+          const normalizedTerm = term.toLowerCase();
+          if (normalizedTerm.length < 2) continue;
+
+          const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "gi");
+          if (pattern.test(substituted)) {
+            pattern.lastIndex = 0;
+            const cleanMeaning = meaning.trim().replace(/\.+$/, "");
+            substituted = substituted.replace(pattern, `[${cleanMeaning}]`);
+            termsExplained.push(`${term}: ${cleanMeaning}`);
+          }
+        }
+
+        if (termsExplained.length > 0) {
+          substituted = substituted.replace(/\s+/g, " ").trim();
+          normal = substituted;
+        } else {
+          const explanations = matched.slice(0, 4).map(m => `${m.term}: ${m.meaning}`);
+          normal = "Possible meaning: " + explanations.join(" | ");
+        }
+      }
+
+      return {
+        is_brainrot: true,
+        brainrot_text: matched.map(m => m.term).join(", "),
+        equivalent_text: normal,
+        formal_explanation: "Offline translation (glossary lookup).",
+        sentiment_label: "neutral",
+        confidence_score: 0.8,
+        flagged_for_review: false,
+        model_used: "client_offline_glossary"
+      };
+    }
+
+    return {
+      is_brainrot: false,
+      brainrot_text: null,
+      equivalent_text: cleaned,
+      formal_explanation: "No brainrot detected (Offline glossary check).",
+      sentiment_label: "unclear",
+      confidence_score: 0.8,
+      flagged_for_review: false,
+      model_used: "client_offline_glossary"
+    };
+  }
+
   /* ── Extension context helpers ───────────────────────────────── */
   function hasLiveExtensionContext() {
     if (extensionContextInvalidated) return false;
@@ -346,7 +480,8 @@ if (!window.__brainrotContentScriptLoaded) {
           confidence: entry.confidence || 0,
           source_url: entry.source_url || "",
           page_url: window.location.href,
-          page_title: document.title || ""
+          page_title: document.title || "",
+          model_used: entry.model_used || ""
         }
       });
     } catch (e) {
@@ -557,6 +692,10 @@ if (!window.__brainrotContentScriptLoaded) {
       hasKeywordHint,
       lookupCustomDictionary,
       getMediaType,
+      translateTextOffline,
+      setOfflineGlossaryForTest(entries) {
+        offlineGlossary = Array.isArray(entries) ? entries : [];
+      },
       setCustomDictionaryForTest(entries) {
         customDictionary = Array.isArray(entries) ? entries : [];
       }
@@ -684,24 +823,42 @@ if (!window.__brainrotContentScriptLoaded) {
 
   async function analyzeMediaPayload(anchor, payload) {
     bubble.showLoadingState(anchor, "Analyzing screenshot or GIF...");
-    const result = await postJson(MEDIA_ENDPOINT, {
-      image_base64: payload.image_base64, media_type: payload.media_type,
-      source_url: payload.source_url, frame0_base64: payload.frame0_base64,
-      frame0_media_type: payload.frame0_media_type,
-      page_title: payload.page_title, page_domain: payload.page_domain
-    });
-    if (!result.is_brainrot) { bubble.hide(); return; }
-    incrementBrainrotBadge();
-    bubble.showImageAnalysisResult(anchor, result, payload.previewSrc);
-    // Phase 3: Save image analysis to history
-    saveToHistory({
-      type: "image",
-      original: payload.source_url || "Screenshot",
-      source_url: payload.source_url || "",
-      translation: result.brainrot_meaning || result.equivalent_text || "",
-      sentiment: "neutral",
-      confidence: result.confidence_score || 0
-    });
+    try {
+      const result = await postJson(MEDIA_ENDPOINT, {
+        image_base64: payload.image_base64, media_type: payload.media_type,
+        source_url: payload.source_url, frame0_base64: payload.frame0_base64,
+        frame0_media_type: payload.frame0_media_type,
+        page_title: payload.page_title, page_domain: payload.page_domain
+      });
+      if (!result.is_brainrot) { bubble.hide(); return; }
+      incrementBrainrotBadge();
+      bubble.showImageAnalysisResult(anchor, result, payload.previewSrc);
+      // Phase 3: Save image analysis to history
+      saveToHistory({
+        type: "image",
+        original: payload.source_url || "Screenshot",
+        source_url: payload.source_url || "",
+        translation: result.brainrot_meaning || result.equivalent_text || "",
+        sentiment: "neutral",
+        confidence: result.confidence_score || 0
+      });
+    } catch (error) {
+      const errMsg = String(error?.message || "").toLowerCase();
+      const isConnectionFailure =
+        errMsg.includes("failed to fetch") ||
+        errMsg.includes("networkerror") ||
+        errMsg.includes("unreachable") ||
+        errMsg.includes("timeout") ||
+        errMsg.includes("connection") ||
+        errMsg.includes("offline") ||
+        error instanceof TypeError;
+
+      if (isConnectionFailure) {
+        throw new Error("Connection offline: Meme analysis requires backend server");
+      } else {
+        throw error;
+      }
+    }
   }
 
   /* ── Text analysis ───────────────────────────────────────────── */
@@ -819,14 +976,53 @@ if (!window.__brainrotContentScriptLoaded) {
         });
       }
       incrementBrainrotBadge();
-      // Phase 3: Save to history
       saveToHistory({
         type: "text", original: selectionData.selectedText,
         translation: result.equivalent_text || "", sentiment: result.sentiment_label || "unclear",
         confidence: result.confidence_score || 0
       });
     } catch (error) {
-      bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text analysis failed.");
+      const errMsg = String(error?.message || "").toLowerCase();
+      const isConnectionFailure =
+        errMsg.includes("failed to fetch") ||
+        errMsg.includes("networkerror") ||
+        errMsg.includes("unreachable") ||
+        errMsg.includes("timeout") ||
+        errMsg.includes("connection") ||
+        errMsg.includes("offline") ||
+        error instanceof TypeError;
+
+      if (isConnectionFailure) {
+        try {
+          const result = translateTextOffline(selectionData.selectedText);
+          if (!result.is_brainrot) {
+            bubble.showInfo(
+              selectionData.rect,
+              "No Brainrot Detected (Offline)",
+              result.formal_explanation || "The offline glossary did not match any slang terms in this text."
+            );
+            return;
+          }
+
+          const annotated = annotateSelectionInline(selectionData, result);
+          if (annotated) {
+            bubble.hide();
+          } else {
+            bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText, null);
+          }
+          incrementBrainrotBadge();
+          saveToHistory({
+            type: "text", original: selectionData.selectedText,
+            translation: result.equivalent_text || "", sentiment: result.sentiment_label || "unclear",
+            confidence: result.confidence_score || 0,
+            model_used: result.model_used || ""
+          });
+        } catch (offlineErr) {
+          bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text analysis failed.");
+        }
+      } else {
+        bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text analysis failed.");
+      }
     }
   }
 
@@ -857,7 +1053,21 @@ if (!window.__brainrotContentScriptLoaded) {
         await runSelectionRecheck(selectionData);
       });
     } catch (error) {
-      bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text recheck failed.");
+      const errMsg = String(error?.message || "").toLowerCase();
+      const isConnectionFailure =
+        errMsg.includes("failed to fetch") ||
+        errMsg.includes("networkerror") ||
+        errMsg.includes("unreachable") ||
+        errMsg.includes("timeout") ||
+        errMsg.includes("connection") ||
+        errMsg.includes("offline") ||
+        error instanceof TypeError;
+
+      if (isConnectionFailure) {
+        bubble.showError(selectionData.rect, "Recheck unavailable: DeepSeek recheck requires backend connection.");
+      } else {
+        bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text recheck failed.");
+      }
     }
   }
 
@@ -998,11 +1208,6 @@ if (!window.__brainrotContentScriptLoaded) {
 
     handle.addEventListener("pointerup", finishDrag);
     handle.addEventListener("pointercancel", finishDrag);
-  }
-
-  async function adjustLauncherScale(direction) {
-    const nextScale = clampLauncherScale(runtimeSettings.brainrotLauncherScale + direction * LAUNCHER_SCALE_STEP);
-    await writeSettings({ brainrotLauncherScale: nextScale });
   }
 
   function createLauncher() {
@@ -1196,6 +1401,10 @@ if (!window.__brainrotContentScriptLoaded) {
           customDictionary = Array.isArray(changes.brainrotCustomDictionary.newValue)
             ? changes.brainrotCustomDictionary.newValue : [];
         }
+        if (changes.brainrotOfflineGlossary) {
+          offlineGlossary = Array.isArray(changes.brainrotOfflineGlossary.newValue)
+            ? changes.brainrotOfflineGlossary.newValue : [];
+        }
       });
     } catch (error) {
       markExtensionContextInvalidated(error);
@@ -1206,6 +1415,7 @@ if (!window.__brainrotContentScriptLoaded) {
   async function initialize() {
     runtimeSettings = await readSettings();
     loadCustomDictionary();
+    loadOfflineGlossary();
     createLauncher();
     refreshLauncherState();
   }

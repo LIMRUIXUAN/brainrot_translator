@@ -519,6 +519,12 @@
   text-transform: uppercase;
 }
 
+.history-type-badge.is-offline {
+  background: var(--bt-warning-soft);
+  color: var(--bt-warning-text);
+  margin-left: 6px;
+}
+
 .history-type-badge.is-image {
   background: var(--bt-accent-purple-soft);
   color: var(--bt-accent-purple);

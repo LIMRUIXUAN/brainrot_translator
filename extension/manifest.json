@@ -51,5 +51,16 @@
       ],
       "run_at": "document_idle"
     }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "slang_terms.json"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
+    }
   ]
 }

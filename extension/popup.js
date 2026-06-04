@@ -18,6 +18,140 @@
   const SIDE_PANEL_TABS = ["translate-scan", "history-glossary", "settings-status"];
   let onboardingStepIndex = 0;
 
+  let offlineGlossary = [];
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function loadOfflineGlossary() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get({ brainrotOfflineGlossary: [] }, (result) => {
+        offlineGlossary = Array.isArray(result.brainrotOfflineGlossary)
+          ? result.brainrotOfflineGlossary : [];
+        resolve(offlineGlossary);
+      });
+    });
+  }
+
+  function translateTextOffline(text) {
+    const cleaned = text.trim();
+    if (!cleaned) {
+      return {
+        is_brainrot: false,
+        brainrot_text: null,
+        equivalent_text: "",
+        formal_explanation: "Empty text.",
+        sentiment_label: "unclear",
+        confidence_score: 0.0,
+        flagged_for_review: false,
+        model_used: "client_offline_glossary"
+      };
+    }
+
+    const lowered = cleaned.toLowerCase();
+    
+    // First, check exact match (case-insensitive)
+    const exactMatches = offlineGlossary.filter(
+      (entry) => String(entry.term || "").toLowerCase().trim() === lowered
+    );
+    if (exactMatches.length > 0) {
+      const match = exactMatches[0];
+      return {
+        is_brainrot: true,
+        brainrot_text: match.term,
+        equivalent_text: match.meaning,
+        formal_explanation: `Matched exact term "${match.term}" offline.`,
+        sentiment_label: "neutral",
+        confidence_score: 0.8,
+        flagged_for_review: false,
+        model_used: "client_offline_glossary"
+      };
+    }
+
+    // Substring lookup matching Python logic
+    const matched = [];
+    const sortedGlossary = [...offlineGlossary].sort((a, b) => {
+      return String(b.term || "").length - String(a.term || "").length;
+    });
+
+    for (const entry of sortedGlossary) {
+      const term = String(entry.term || "").trim();
+      const meaning = String(entry.meaning || "").trim();
+      if (!term || !meaning) continue;
+      const normalizedTerm = term.toLowerCase();
+      if (normalizedTerm.length < 2) continue;
+
+      try {
+        const pattern = new RegExp(`(?<!\\w)${escapeRegExp(normalizedTerm)}(?!\\w)`, "i");
+        if (pattern.test(lowered)) {
+          matched.push({ term, meaning });
+        }
+      } catch (e) {
+        const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "i");
+        if (pattern.test(lowered)) {
+          matched.push({ term, meaning });
+        }
+      }
+    }
+
+    if (matched.length > 0) {
+      let normal = cleaned;
+      if (matched.length === 1 && matched[0].term.toLowerCase().trim() === lowered) {
+        normal = matched[0].meaning;
+      } else {
+        let substituted = cleaned;
+        const termsExplained = [];
+
+        for (const entry of sortedGlossary) {
+          const term = String(entry.term || "").trim();
+          const meaning = String(entry.meaning || "").trim();
+          if (!term || !meaning) continue;
+          const normalizedTerm = term.toLowerCase();
+          if (normalizedTerm.length < 2) continue;
+
+          const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "gi");
+          if (pattern.test(substituted)) {
+            pattern.lastIndex = 0;
+            const cleanMeaning = meaning.trim().replace(/\.+$/, "");
+            substituted = substituted.replace(pattern, `[${cleanMeaning}]`);
+            termsExplained.push(`${term}: ${cleanMeaning}`);
+          }
+        }
+
+        if (termsExplained.length > 0) {
+          substituted = substituted.replace(/\s+/g, " ").trim();
+          normal = substituted;
+        } else {
+          const explanations = matched.slice(0, 4).map(m => `${m.term}: ${m.meaning}`);
+          normal = "Possible meaning: " + explanations.join(" | ");
+        }
+      }
+
+      return {
+        is_brainrot: true,
+        brainrot_text: matched.map(m => m.term).join(", "),
+        equivalent_text: normal,
+        formal_explanation: "Offline translation (glossary lookup).",
+        sentiment_label: "neutral",
+        confidence_score: 0.8,
+        flagged_for_review: false,
+        model_used: "client_offline_glossary"
+      };
+    }
+
+    return {
+      is_brainrot: false,
+      brainrot_text: null,
+      equivalent_text: cleaned,
+      formal_explanation: "No brainrot detected (Offline glossary check).",
+      sentiment_label: "unclear",
+      confidence_score: 0.8,
+      flagged_for_review: false,
+      model_used: "client_offline_glossary"
+    };
+  }
+
   function normalizeSettings(rawSettings) {
     const raw = rawSettings || {};
     const apiBase =
@@ -451,12 +585,19 @@
     const translationTitle = escapeHtml(fullTranslation);
     const badgeClass = isImage ? "history-type-badge is-image" : "history-type-badge";
     const typeLabel = isImage ? "Image" : "Text";
+    const isOffline = entry.model_used === "client_offline_glossary";
+    const offlineBadgeHtml = isOffline
+      ? `<span class="history-type-badge is-offline">Offline</span>`
+      : "";
 
     return `
       <div class="history-entry">
         <div class="history-header">
           <span class="history-time">${dateStr}</span>
-          <span class="${badgeClass}">${typeLabel}</span>
+          <span>
+            <span class="${badgeClass}">${typeLabel}</span>
+            ${offlineBadgeHtml}
+          </span>
         </div>
         <div class="history-content">
           <div class="history-original" title="${originalTitle}">"${original}"</div>
@@ -575,8 +716,8 @@
     }
     setDirectTranslateResult("Translating...", null);
 
+    const direction = elements.translateDirection?.value === "to-brainrot" ? "to-brainrot" : "to-english";
     try {
-      const direction = elements.translateDirection?.value === "to-brainrot" ? "to-brainrot" : "to-english";
       const endpoint = direction === "to-brainrot"
         ? "/api/v1/reverse-translate"
         : "/api/v1/analyze-highlighted-text";
@@ -613,6 +754,39 @@
       await saveHistoryEntry(entry);
       await renderHistory();
     } catch (error) {
+      const errMsg = String(error?.message || "").toLowerCase();
+      const isConnectionFailure =
+        errMsg.includes("failed to fetch") ||
+        errMsg.includes("networkerror") ||
+        errMsg.includes("unreachable") ||
+        errMsg.includes("timeout") ||
+        errMsg.includes("connection") ||
+        errMsg.includes("offline") ||
+        error instanceof TypeError;
+
+      if (isConnectionFailure && direction === "to-english") {
+        try {
+          const payload = translateTextOffline(inputValue);
+          const entry = {
+            timestamp: new Date().toISOString(),
+            type: "text",
+            original: inputValue,
+            translation: payload.equivalent_text || inputValue,
+            sentiment: payload.sentiment_label || "unclear",
+            confidence: payload.confidence_score || 0,
+            page_url: "sidepanel-direct-input",
+            page_title: "Side Panel Direct Input (Offline)",
+            model_used: "client_offline_glossary"
+          };
+          renderDirectTranslateCard(entry);
+          await saveHistoryEntry(entry);
+          await renderHistory();
+          return;
+        } catch (offlineErr) {
+          // Fall through to error notice
+        }
+      }
+
       setDirectTranslateResult(
         error instanceof Error ? error.message : "Unable to reach the backend.",
         "error"
@@ -891,7 +1065,6 @@
     await renderDictionary();
   }
 
-
   function renderHealthError(baseUrl, message) {
     setHealthCard(
       elements.backendStatusCard,
@@ -919,6 +1092,18 @@
     );
     setNotice(message, "error");
     renderFrequencyError("Dashboard unavailable while the backend is offline.");
+  }
+
+  // Fallback function for rendering word frequency errors when offline
+  function renderFrequencyError(message) {
+    const container = document.getElementById("barChartContainer");
+    if (container) {
+      container.innerHTML = `<p class="empty-state">${escapeHtml(message)}</p>`;
+    }
+    const statusEl = document.getElementById("frequencyStatus");
+    if (statusEl) {
+      statusEl.textContent = "";
+    }
   }
 
   async function getActiveTab() {
@@ -1197,6 +1382,7 @@
     const currentSettings = await getStoredSettings();
     renderSettings(currentSettings);
     await restoreSidepanelTab();
+    await loadOfflineGlossary();
     await refreshHealth(currentSettings.brainrotApiBaseUrl);
     
     // Render History & Dictionary
@@ -1386,6 +1572,10 @@
       }
       if (changes.brainrotCustomDictionary) {
         renderDictionary().catch(() => undefined);
+      }
+      if (changes.brainrotOfflineGlossary) {
+        offlineGlossary = Array.isArray(changes.brainrotOfflineGlossary.newValue)
+          ? changes.brainrotOfflineGlossary.newValue : [];
       }
     });
   }

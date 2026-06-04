@@ -19,10 +19,24 @@ async function configureSidePanelBehavior() {
   }
 }
 
+async function loadOfflineGlossary() {
+  try {
+    const url = chrome.runtime.getURL("slang_terms.json");
+    const response = await fetch(url);
+    const data = await response.json();
+    if (Array.isArray(data)) {
+      await chrome.storage.local.set({ brainrotOfflineGlossary: data });
+    }
+  } catch (error) {
+    // Ignore loading failures
+  }
+}
+
 configureSidePanelBehavior().catch(() => undefined);
 
 chrome.runtime.onInstalled.addListener(() => {
   configureSidePanelBehavior().catch(() => undefined);
+  loadOfflineGlossary().catch(() => undefined);
 
   // Phase 6: Create right-click context menu
   chrome.contextMenus.create({
@@ -39,6 +53,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onStartup.addListener(() => {
   configureSidePanelBehavior().catch(() => undefined);
+  loadOfflineGlossary().catch(() => undefined);
 });
 
 function resetBadge(tabId) {
