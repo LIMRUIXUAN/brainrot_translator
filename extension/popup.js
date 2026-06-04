@@ -1040,48 +1040,6 @@
     }
   }
 
-  async function scanActivePage() {
-    try {
-      await ensureActivePageConnection();
-      const response = await sendMessageToActiveTab({ action: "brainrotScanPage" });
-      if (!response?.ok) {
-        throw new Error("The content script did not acknowledge the scan request.");
-      }
-      setNotice("Page scan requested on the active tab.", "success");
-      renderPageStatus("Connected", "Scanning visible page text for recognized brainrot terms.", "ok");
-    } catch (error) {
-      renderPageStatus(
-        "Not available",
-        "Use a normal http or https webpage, then try scanning again.",
-        "error"
-      );
-      setNotice(error instanceof Error ? error.message : "Unable to scan the active page.", "error");
-    }
-  }
-
-  async function clearActivePageHighlights() {
-    try {
-      await ensureActivePageConnection();
-      const response = await sendMessageToActiveTab({ action: "brainrotClearPageHighlights" });
-      if (!response?.ok) {
-        throw new Error("The content script did not acknowledge the clear request.");
-      }
-      const count = Number(response.count) || 0;
-      setNotice(
-        count > 0 ? `Removed ${count} page highlight${count === 1 ? "" : "s"}.` : "No page highlights were active.",
-        "success"
-      );
-      renderPageStatus("Connected", "Inline page highlights were cleared.", "ok");
-    } catch (error) {
-      renderPageStatus(
-        "Not available",
-        "Use a normal http or https webpage, then try clearing again.",
-        "error"
-      );
-      setNotice(error instanceof Error ? error.message : "Unable to clear page highlights.", "error");
-    }
-  }
-
   async function refreshHealth(baseUrl) {
     setNotice("Checking backend health...", null);
 
@@ -1172,8 +1130,6 @@
     elements.pageStatusHint = document.getElementById("pageStatusHint");
     elements.checkPageButton = document.getElementById("checkPageButton");
     elements.showTestBubbleButton = document.getElementById("showTestBubbleButton");
-    elements.scanPageButton = document.getElementById("scanPageButton");
-    elements.clearPageHighlightsButton = document.getElementById("clearPageHighlightsButton");
     elements.refreshFrequencyButton = document.getElementById("refreshStatsButton");
     elements.frequencyStatus = document.getElementById("frequencyStatus");
     elements.directTranslateInput = document.getElementById("directTranslateInput");
@@ -1250,16 +1206,6 @@
     elements.showTestBubbleButton?.addEventListener("click", () => {
       showTestBubbleOnPage().catch((error) => {
         setNotice(error instanceof Error ? error.message : "Failed to show the test bubble.", "error");
-      });
-    });
-    elements.scanPageButton?.addEventListener("click", () => {
-      scanActivePage().catch((error) => {
-        setNotice(error instanceof Error ? error.message : "Failed to scan the active page.", "error");
-      });
-    });
-    elements.clearPageHighlightsButton?.addEventListener("click", () => {
-      clearActivePageHighlights().catch((error) => {
-        setNotice(error instanceof Error ? error.message : "Failed to clear page highlights.", "error");
       });
     });
     elements.directTranslateButton?.addEventListener("click", () => {

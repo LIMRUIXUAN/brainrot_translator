@@ -413,7 +413,7 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   function clearPageHighlights() {
-    const spans = Array.from(document.querySelectorAll(".brainrot-inline-highlight"));
+    const spans = Array.from(document.querySelectorAll(".brainrot-inline-highlight, .brainrot-inline-annotation"));
     for (const span of spans) {
       const parent = span.parentNode;
       if (!parent) continue;
@@ -680,11 +680,16 @@ if (!window.__brainrotContentScriptLoaded) {
     if (!translation || !selectionData?.range) return false;
 
     const range = selectionData.range.cloneRange();
-    if (range.collapsed || range.commonAncestorContainer?.nodeType !== Node.TEXT_NODE) {
+    if (range.collapsed) {
       return false;
     }
 
-    const parentElement = range.commonAncestorContainer.parentElement;
+    const commonNode = range.commonAncestorContainer;
+    const parentElement = commonNode.nodeType === Node.TEXT_NODE
+      ? commonNode.parentElement
+      : commonNode instanceof Element
+        ? commonNode
+        : commonNode.parentElement;
     if (!parentElement || parentElement.closest(".brainrot-inline-annotation, .brainrot-inline-highlight")) {
       return false;
     }
@@ -699,6 +704,7 @@ if (!window.__brainrotContentScriptLoaded) {
       span.appendChild(contents);
       range.insertNode(span);
       window.getSelection()?.removeAllRanges();
+      highlightedElements.add(span);
       return true;
     } catch (error) {
       span.remove();
