@@ -6,11 +6,15 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 from functools import lru_cache
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from .agent import BrainrotAgent
 from .config import get_settings
@@ -46,6 +50,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 agent = BrainrotAgent(settings=settings)
 local_translator = MockLocalTranslator(settings.reference_dataset_path)
+limiter = Limiter(key_func=get_remote_address)
 
 SLANG_TEXT_MARKERS = (
     "aura",
@@ -371,6 +376,23 @@ def _record_text_frequency(selected_text: str, page_url: str | None) -> None:
     )
 
 
+def require_api_auth(request: Request) -> None:
+    if settings.api_auth_token is None:
+        return
+
+    header = request.headers.get("Authorization", "")
+    scheme, _, token = header.partition(" ")
+    if (
+        scheme.casefold() != "bearer"
+        or not token
+        or not secrets.compare_digest(token, settings.api_auth_token)
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid API auth token.",
+        )
+
+
 def _safe_non_brainrot_text_analysis(selected_text: str) -> HighlightedTextAnalysisResponse:
     cleaned = selected_text.strip()
     return HighlightedTextAnalysisResponse(
@@ -544,6 +566,8 @@ def _try_db_image_lookup(image_hash: str) -> ImageAnalysisResponse | None:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Brainrot Translator API")
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -578,7 +602,11 @@ def create_app() -> FastAPI:
             "api_base_url": settings.extension_api_base_url,
         }
 
-    @app.post("/translate", response_model=TranslateResponse)
+    @app.post(
+        "/translate",
+        response_model=TranslateResponse,
+        dependencies=[Depends(require_api_auth)],
+    )
     async def translate(request: Request):
         try:
             payload = await request.json()
@@ -615,14 +643,15 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/v1/reverse-translate",
         response_model=ReverseTranslateResponse,
+        dependencies=[Depends(require_api_auth)],
     )
     async def reverse_translate(
-        request: ReverseTranslateRequest,
+        payload: ReverseTranslateRequest,
     ) -> ReverseTranslateResponse:
-        result = await reverse_translate_text(request.text)
+        result = await reverse_translate_text(payload.text)
         logger.info(
             "REVERSE TRANSLATE for %r via %s",
-            request.text[:80],
+            payload.text[:80],
             result.model_used,
         )
         return result
@@ -634,12 +663,15 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/v1/analyze-highlighted-text",
         response_model=HighlightedTextAnalysisResponse,
+        dependencies=[Depends(require_api_auth)],
     )
+    @limiter.limit(settings.rate_limit_analyze_text)
     async def analyze_highlighted_text(
-        request: HighlightedTextAnalysisRequest,
+        request: Request,
+        payload: HighlightedTextAnalysisRequest,
     ) -> HighlightedTextAnalysisResponse:
-        lookup_key = _normalise_text_key(request.selected_text)
-        _record_text_frequency(request.selected_text, request.page_url)
+        lookup_key = _normalise_text_key(payload.selected_text)
+        _record_text_frequency(payload.selected_text, payload.page_url)
 
         # ── Step 1: Check local slang_terms.json ──────────────────────
         json_hit = _try_slang_json_lookup(lookup_key)
@@ -648,7 +680,7 @@ def create_app() -> FastAPI:
             return json_hit
 
         # ── Step 2: Prefer the current trained local model/filter ──────
-        local_hit = _try_local_model_text_analysis(request.selected_text)
+        local_hit = _try_local_model_text_analysis(payload.selected_text)
         if local_hit is not None:
             logger.info("TEXT LOCAL MODEL HIT for '%s'", lookup_key)
             if _is_low_confidence_result(local_hit):
@@ -656,9 +688,9 @@ def create_app() -> FastAPI:
                     "TEXT LOCAL MODEL LOW CONFIDENCE for '%s' → calling OpenRouter",
                     lookup_key,
                 )
-                return await _run_openrouter_text_analysis(request, lookup_key)
+                return await _run_openrouter_text_analysis(payload, lookup_key)
 
-            final = _stage_low_confidence_text(request, local_hit)
+            final = _stage_low_confidence_text(payload, local_hit)
             save_cached_text(lookup_key, final.model_dump())
             return final
 
@@ -671,38 +703,48 @@ def create_app() -> FastAPI:
                     "TEXT CACHE HIT LOW CONFIDENCE for '%s' → refreshing with OpenRouter",
                     lookup_key,
                 )
-                return await _run_openrouter_text_analysis(request, lookup_key)
+                return await _run_openrouter_text_analysis(payload, lookup_key)
             return db_hit
 
         # ── Step 4: Cache miss → call DeepSeek via OpenRouter ─────────
         logger.info("TEXT CACHE MISS for '%s' → calling OpenRouter", lookup_key)
-        return await _run_openrouter_text_analysis(request, lookup_key)
+        return await _run_openrouter_text_analysis(payload, lookup_key)
 
     @app.post(
         "/api/v1/recheck-highlighted-text",
         response_model=HighlightedTextAnalysisResponse,
+        dependencies=[Depends(require_api_auth)],
     )
+    @limiter.limit(settings.rate_limit_recheck_text)
     async def recheck_highlighted_text(
-        request: HighlightedTextAnalysisRequest,
+        request: Request,
+        payload: HighlightedTextAnalysisRequest,
     ) -> HighlightedTextAnalysisResponse:
-        lookup_key = _normalise_text_key(request.selected_text)
-        _record_text_frequency(request.selected_text, request.page_url)
+        lookup_key = _normalise_text_key(payload.selected_text)
+        _record_text_frequency(payload.selected_text, payload.page_url)
         logger.info("TEXT MANUAL RECHECK for '%s' → calling OpenRouter", lookup_key)
-        return await _run_openrouter_text_analysis(request, lookup_key)
+        return await _run_openrouter_text_analysis(payload, lookup_key)
 
     @app.get(
         "/api/v1/dashboard/word-frequency",
         response_model=DashboardWordFrequencyResponse,
+        dependencies=[Depends(require_api_auth)],
     )
-    async def dashboard_word_frequency(limit: int = 20) -> DashboardWordFrequencyResponse:
+    @limiter.limit(settings.rate_limit_dashboard)
+    async def dashboard_word_frequency(
+        request: Request,
+        limit: int = 20,
+    ) -> DashboardWordFrequencyResponse:
         safe_limit = max(1, min(int(limit), 100))
         return DashboardWordFrequencyResponse(items=list_word_frequencies(safe_limit))
 
     @app.get(
         "/api/v1/dashboard/stats",
         response_model=DashboardStatsResponse,
+        dependencies=[Depends(require_api_auth)],
     )
-    async def dashboard_stats() -> DashboardStatsResponse:
+    @limiter.limit(settings.rate_limit_dashboard)
+    async def dashboard_stats(request: Request) -> DashboardStatsResponse:
         raw = get_dashboard_stats()
         return DashboardStatsResponse(**raw)
 
@@ -713,12 +755,15 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/v1/analyze-screenshot-media",
         response_model=ImageAnalysisResponse,
+        dependencies=[Depends(require_api_auth)],
     )
+    @limiter.limit(settings.rate_limit_analyze_media)
     async def analyze_screenshot_media(
-        request: ScreenshotMediaRequest,
+        request: Request,
+        payload: ScreenshotMediaRequest,
     ) -> ImageAnalysisResponse:
         image_bytes = decode_base64_payload(
-            request.image_base64,
+            payload.image_base64,
             field_name="image_base64",
         )
         if len(image_bytes) > settings.max_image_bytes:
@@ -727,9 +772,9 @@ def create_app() -> FastAPI:
                 detail="Images larger than 5MB are not accepted.",
             )
 
-        if request.frame0_base64:
+        if payload.frame0_base64:
             frame_bytes = decode_base64_payload(
-                request.frame0_base64,
+                payload.frame0_base64,
                 field_name="frame0_base64",
             )
             if len(frame_bytes) > settings.max_image_bytes:
@@ -739,7 +784,7 @@ def create_app() -> FastAPI:
                 )
 
         # ── Step 1: Hash the image payload ────────────────────────────
-        image_hash = _hash_image_payload(request.image_base64)
+        image_hash = _hash_image_payload(payload.image_base64)
 
         # ── Step 2: Check PostgreSQL cache table ──────────────────────
         db_hit = _try_db_image_lookup(image_hash)
@@ -750,20 +795,20 @@ def create_app() -> FastAPI:
         # ── Step 3: Cache miss → call Gemini via OpenRouter ───────────
         logger.info("IMAGE CACHE MISS for hash %s → calling OpenRouter", image_hash[:16])
         result = await agent.analyze_screenshot_media(
-            image_base64=request.image_base64,
-            media_type=request.media_type,
-            source_url=request.source_url,
-            frame0_base64=request.frame0_base64,
-            frame0_media_type=request.frame0_media_type,
-            page_title=request.page_title,
-            page_domain=request.page_domain,
+            image_base64=payload.image_base64,
+            media_type=payload.media_type,
+            source_url=payload.source_url,
+            frame0_base64=payload.frame0_base64,
+            frame0_media_type=payload.frame0_media_type,
+            page_title=payload.page_title,
+            page_domain=payload.page_domain,
         )
 
         flagged = result.flagged_for_review or result.confidence_score < settings.low_confidence_threshold
         if flagged:
             flag_image_for_review(
-                source_url=request.source_url,
-                media_type=request.media_type,
+                source_url=payload.source_url,
+                media_type=payload.media_type,
                 agent_meaning=result.brainrot_meaning or result.equivalent_text,
                 confidence=result.confidence_score,
             )
@@ -775,10 +820,17 @@ def create_app() -> FastAPI:
 
         return final
 
-    @app.post("/api/v1/analyze-image", response_model=ImageAnalysisResponse)
-    async def analyze_image_alias(request: ImageAnalysisRequest) -> ImageAnalysisResponse:
-        screenshot_request = ScreenshotMediaRequest.model_validate(request.model_dump())
-        return await analyze_screenshot_media(screenshot_request)
+    @app.post(
+        "/api/v1/analyze-image",
+        response_model=ImageAnalysisResponse,
+        dependencies=[Depends(require_api_auth)],
+    )
+    async def analyze_image_alias(
+        request: Request,
+        payload: ImageAnalysisRequest,
+    ) -> ImageAnalysisResponse:
+        screenshot_payload = ScreenshotMediaRequest.model_validate(payload.model_dump())
+        return await analyze_screenshot_media(request, screenshot_payload)
 
     return app
 

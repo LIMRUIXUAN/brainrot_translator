@@ -33,6 +33,49 @@ class ApiTests(unittest.TestCase):
         self.assertIn("database_configured", payload)
         self.assertIn("text_recheck_configured", payload)
 
+    def test_auth_token_is_required_when_configured_except_health(self) -> None:
+        hardened_settings = replace(api_main.settings, api_auth_token="secret-token")
+
+        with patch("api.main.settings", hardened_settings), \
+             patch("api.main.get_dashboard_stats", return_value={
+                 "total_text_analyses": 0,
+                 "total_image_analyses": 0,
+                 "unique_terms": 0,
+                 "top_term": None,
+                 "top_term_count": 0,
+             }):
+            self.assertEqual(self.client.get("/health").status_code, 200)
+            missing = self.client.get("/api/v1/dashboard/stats")
+            wrong = self.client.get(
+                "/api/v1/dashboard/stats",
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+            accepted = self.client.get(
+                "/api/v1/dashboard/stats",
+                headers={"Authorization": "Bearer secret-token"},
+            )
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(accepted.status_code, 200)
+
+    def test_dashboard_rate_limit_is_configurable(self) -> None:
+        limited_settings = replace(api_main.settings, rate_limit_dashboard="1/minute")
+        with patch("api.main.settings", limited_settings), \
+             patch("api.main.get_dashboard_stats", return_value={
+                 "total_text_analyses": 0,
+                 "total_image_analyses": 0,
+                 "unique_terms": 0,
+                 "top_term": None,
+                 "top_term_count": 0,
+             }):
+            limited_client = TestClient(api_main.create_app())
+            first = limited_client.get("/api/v1/dashboard/stats")
+            second = limited_client.get("/api/v1/dashboard/stats")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+
     def test_translate_requires_text_field(self) -> None:
         response = self.client.post("/translate", json={})
         self.assertEqual(response.status_code, 400)

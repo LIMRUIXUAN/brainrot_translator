@@ -44,6 +44,11 @@ class Settings:
     low_confidence_threshold: float
     max_image_bytes: int
     cache_ttl_hours: int
+    api_auth_token: str | None
+    rate_limit_analyze_text: str
+    rate_limit_recheck_text: str
+    rate_limit_analyze_media: str
+    rate_limit_dashboard: str
     enable_local_translation_stub: bool
     extension_api_base_url: str
 
@@ -79,6 +84,19 @@ def get_settings() -> Settings:
         ),
         max_image_bytes=int((os.getenv("BRAINROT_MAX_IMAGE_BYTES") or str(5 * 1024 * 1024)).strip()),
         cache_ttl_hours=int((os.getenv("BRAINROT_CACHE_TTL_HOURS") or "168").strip()),
+        api_auth_token=(os.getenv("BRAINROT_API_AUTH_TOKEN") or "").strip() or None,
+        rate_limit_analyze_text=(
+            os.getenv("BRAINROT_RATE_LIMIT_ANALYZE_TEXT") or "30/minute"
+        ).strip(),
+        rate_limit_recheck_text=(
+            os.getenv("BRAINROT_RATE_LIMIT_RECHECK_TEXT") or "10/minute"
+        ).strip(),
+        rate_limit_analyze_media=(
+            os.getenv("BRAINROT_RATE_LIMIT_ANALYZE_MEDIA") or "10/minute"
+        ).strip(),
+        rate_limit_dashboard=(
+            os.getenv("BRAINROT_RATE_LIMIT_DASHBOARD") or "60/minute"
+        ).strip(),
         enable_local_translation_stub=_env_flag(
             "ENABLE_LOCAL_TRANSLATION_STUB",
             True,

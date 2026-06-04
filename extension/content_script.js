@@ -9,6 +9,7 @@ if (!window.__brainrotContentScriptLoaded) {
   const HOVER_DELAY_MS = 600;
   const DEFAULT_SETTINGS = Object.freeze({
     brainrotApiBaseUrl: DEFAULT_API_BASE,
+    brainrotApiAuthToken: "",
     brainrotEnableTextSelection: true,
     brainrotConfirmTextSelection: true,
     brainrotEnableHoverDetection: true,
@@ -138,6 +139,10 @@ if (!window.__brainrotContentScriptLoaded) {
 
     return {
       brainrotApiBaseUrl: apiBaseUrl.replace(/\/+$/, ""),
+      brainrotApiAuthToken:
+        typeof raw.brainrotApiAuthToken === "string"
+          ? raw.brainrotApiAuthToken.trim()
+          : DEFAULT_SETTINGS.brainrotApiAuthToken,
       brainrotEnableTextSelection:
         typeof raw.brainrotEnableTextSelection === "boolean"
           ? raw.brainrotEnableTextSelection
@@ -230,6 +235,30 @@ if (!window.__brainrotContentScriptLoaded) {
     return runtimeSettings.brainrotApiBaseUrl || DEFAULT_API_BASE;
   }
 
+  function buildApiHeaders() {
+    const headers = { "Content-Type": "application/json" };
+    const token = String(runtimeSettings.brainrotApiAuthToken || "").trim();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  function getApiErrorMessage(response, body) {
+    if (response.status === 429) {
+      return "Please wait before trying again. The backend rate limit was reached.";
+    }
+    if (response.status === 401) {
+      return "API auth token is missing or invalid.";
+    }
+    return body.detail || body.error || "Backend request failed.";
+  }
+
+  function shouldRetryApiError(error) {
+    const message = String(error?.message || "");
+    return !message.startsWith("Please wait") && !message.startsWith("API auth token");
+  }
+
   /* ── Phase 1: Page context helpers ───────────────────────────── */
   function getPageContext() {
     return {
@@ -275,16 +304,19 @@ if (!window.__brainrotContentScriptLoaded) {
       try {
         const response = await fetch(`${base}${path}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: buildApiHeaders(),
           body: JSON.stringify(payload)
         });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(body.detail || body.error || "Backend request failed.");
+          throw new Error(getApiErrorMessage(response, body));
         }
         return body;
       } catch (error) {
         lastError = error;
+        if (!shouldRetryApiError(error)) {
+          throw error;
+        }
         if (attempt < MAX_RETRIES) {
           const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
           await new Promise(r => setTimeout(r, delay));
@@ -515,6 +547,21 @@ if (!window.__brainrotContentScriptLoaded) {
     const url = getMediaUrl(element);
     if (!url) return false;
     return hasMemeHost(url) || hasKeywordHint(url) || hasMemeLikeAspectRatio(element);
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      normalizeSettings,
+      clampLauncherScale,
+      isMemeCandidate,
+      hasKeywordHint,
+      lookupCustomDictionary,
+      getMediaType,
+      setCustomDictionaryForTest(entries) {
+        customDictionary = Array.isArray(entries) ? entries : [];
+      }
+    };
+    return;
   }
 
   function dataUrlToBase64(dataUrl) {

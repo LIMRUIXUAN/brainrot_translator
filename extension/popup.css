@@ -92,6 +92,10 @@ body {
   gap: 8px;
 }
 
+.field + .field {
+  margin-top: 12px;
+}
+
 .field span {
   font-size: 12px;
   font-weight: 700;

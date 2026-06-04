@@ -3,6 +3,7 @@
   const MAX_HISTORY_ENTRIES = 200;
   const DEFAULT_SETTINGS = Object.freeze({
     brainrotApiBaseUrl: DEFAULT_API_BASE,
+    brainrotApiAuthToken: "",
     brainrotEnableTextSelection: true,
     brainrotConfirmTextSelection: true,
     brainrotEnableHoverDetection: true,
@@ -26,6 +27,10 @@
 
     return {
       brainrotApiBaseUrl: apiBase.replace(/\/+$/, ""),
+      brainrotApiAuthToken:
+        typeof raw.brainrotApiAuthToken === "string"
+          ? raw.brainrotApiAuthToken.trim()
+          : DEFAULT_SETTINGS.brainrotApiAuthToken,
       brainrotEnableTextSelection:
         typeof raw.brainrotEnableTextSelection === "boolean"
           ? raw.brainrotEnableTextSelection
@@ -79,6 +84,28 @@
     }
   }
 
+  function buildApiHeaders(settings, includeJson = false) {
+    const headers = {};
+    if (includeJson) {
+      headers["Content-Type"] = "application/json";
+    }
+    const token = String(settings?.brainrotApiAuthToken || "").trim();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    return headers;
+  }
+
+  function getApiErrorMessage(response, payload, fallback) {
+    if (response.status === 429) {
+      return "Please wait before trying again. The backend rate limit was reached.";
+    }
+    if (response.status === 401) {
+      return "API auth token is missing or invalid.";
+    }
+    return payload.detail || payload.error || fallback;
+  }
+
   function getStoredSettings() {
     return new Promise((resolve) => {
       chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS), (result) => {
@@ -96,6 +123,7 @@
   function readFormSettings() {
     return normalizeSettings({
       brainrotApiBaseUrl: elements.apiBaseUrl.value,
+      brainrotApiAuthToken: elements.apiAuthToken?.value || "",
       brainrotEnableTextSelection: elements.enableTextSelection.checked,
       brainrotConfirmTextSelection: elements.confirmTextSelection.checked,
       brainrotEnableHoverDetection: elements.enableHoverDetection.checked,
@@ -107,6 +135,9 @@
 
   function renderSettings(settings) {
     elements.apiBaseUrl.value = settings.brainrotApiBaseUrl;
+    if (elements.apiAuthToken) {
+      elements.apiAuthToken.value = settings.brainrotApiAuthToken;
+    }
     elements.enableTextSelection.checked = settings.brainrotEnableTextSelection;
     elements.confirmTextSelection.checked = settings.brainrotConfirmTextSelection;
     elements.enableHoverDetection.checked = settings.brainrotEnableHoverDetection;
@@ -339,11 +370,14 @@
     setFrequencyStatus(`Showing top ${items.length} slang terms.`, null);
   }
 
-  async function refreshDashboardStats(baseUrl) {
+  async function refreshDashboardStats(baseUrl, settings) {
     try {
-      const response = await fetch(`${baseUrl}/api/v1/dashboard/stats`, { method: "GET" });
+      const response = await fetch(`${baseUrl}/api/v1/dashboard/stats`, {
+        method: "GET",
+        headers: buildApiHeaders(settings)
+      });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.detail || payload.error || "Failed to fetch dashboard stats.");
+      if (!response.ok) throw new Error(getApiErrorMessage(response, payload, "Failed to fetch dashboard stats."));
 
       const totalTextEl = document.getElementById("statTotalText");
       const totalImageEl = document.getElementById("statTotalImage");
@@ -378,17 +412,18 @@
     }
   }
 
-  async function refreshFrequency(baseUrl) {
+  async function refreshFrequency(baseUrl, settings) {
     setFrequencyStatus("Refreshing dashboard...", null);
-    await refreshDashboardStats(baseUrl);
+    await refreshDashboardStats(baseUrl, settings);
 
     try {
       const response = await fetch(`${baseUrl}/api/v1/dashboard/word-frequency?limit=10`, {
-        method: "GET"
+        method: "GET",
+        headers: buildApiHeaders(settings)
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload.detail || payload.error || "Dashboard request failed.");
+        throw new Error(getApiErrorMessage(response, payload, "Dashboard request failed."));
       }
       renderFrequencyBarChart(payload.items || []);
     } catch (error) {
@@ -551,12 +586,12 @@
 
       const response = await fetch(`${settings.brainrotApiBaseUrl}${endpoint}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildApiHeaders(settings, true),
         body: JSON.stringify(requestBody)
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload.detail || payload.error || "Backend request failed.");
+        throw new Error(getApiErrorMessage(response, payload, "Backend request failed."));
       }
 
       const translation = direction === "to-brainrot"
@@ -1056,7 +1091,7 @@
         throw new Error(payload.detail || payload.error || "Backend health check failed.");
       }
       renderHealthSuccess(baseUrl, payload);
-      await refreshFrequency(baseUrl);
+      await refreshFrequency(baseUrl, readFormSettings());
       setNotice("Backend health check succeeded.", "success");
     } catch (error) {
       renderHealthError(
@@ -1106,6 +1141,7 @@
 
   async function initialize() {
     elements.apiBaseUrl = document.getElementById("apiBaseUrl");
+    elements.apiAuthToken = document.getElementById("apiAuthToken");
     elements.enableTextSelection = document.getElementById("enableTextSelection");
     elements.confirmTextSelection = document.getElementById("confirmTextSelection");
     elements.enableHoverDetection = document.getElementById("enableHoverDetection");
@@ -1196,7 +1232,7 @@
         setNotice("Enter a valid API Base URL before refreshing the dashboard.", "error");
         return;
       }
-      refreshFrequency(baseUrl).catch(() => undefined);
+      refreshFrequency(baseUrl, readFormSettings()).catch(() => undefined);
     });
     elements.checkPageButton?.addEventListener("click", () => {
       checkActivePage().catch((error) => {
