@@ -49,6 +49,7 @@ test("normalizeSettings trims values and preserves boolean edge cases", () => {
     brainrotEnableTextSelection: false,
     brainrotEnableHoverDetection: "false",
     brainrotEnableInlineAnnotation: true,
+    brainrotTextModelSpeed: "slow",
     brainrotLauncherPosition: { left: 14.4, top: 92.6 },
     brainrotLauncherScale: 2.2,
     brainrotLauncherMinimized: true
@@ -59,10 +60,18 @@ test("normalizeSettings trims values and preserves boolean edge cases", () => {
   assert.equal(normalized.brainrotEnableTextSelection, false);
   assert.equal(normalized.brainrotEnableHoverDetection, true);
   assert.equal(normalized.brainrotEnableInlineAnnotation, true);
+  assert.equal(normalized.brainrotTextModelSpeed, "slow");
   assert.equal(normalized.brainrotLauncherPosition.left, 14);
   assert.equal(normalized.brainrotLauncherPosition.top, 93);
   assert.equal(normalized.brainrotLauncherScale, 1.5);
   assert.equal(normalized.brainrotLauncherMinimized, true);
+});
+
+test("normalizeSettings defaults invalid text model speed to fast", () => {
+  const api = loadContentScriptApi();
+  const normalized = api.normalizeSettings({ brainrotTextModelSpeed: "turbo" });
+
+  assert.equal(normalized.brainrotTextModelSpeed, "fast");
 });
 
 test("clampLauncherScale clamps and rounds boundary values", () => {
@@ -115,4 +124,28 @@ test("getMediaType infers image content types from URL patterns", () => {
   assert.equal(api.getMediaType("https://example.test/a.png"), "image/png");
   assert.equal(api.getMediaType("https://example.test/a.webp"), "image/webp");
   assert.equal(api.getMediaType("https://example.test/a.jpeg"), "image/jpeg");
+});
+
+test("GIF frame extraction prefers fetched data URL over remote source URL", () => {
+  const api = loadContentScriptApi();
+  const remoteUrl = "https://media.giphy.com/media/example.gif";
+  const dataUrl = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
+  assert.equal(api.getGifFrameExtractionSource({ dataUrl }, remoteUrl), dataUrl);
+  assert.equal(api.getGifFrameExtractionSource({}, remoteUrl), remoteUrl);
+});
+
+test("normalizeCaptureRect clamps and supports reverse drag direction", () => {
+  const api = loadContentScriptApi();
+
+  assert.equal(
+    JSON.stringify(api.normalizeCaptureRect(420, 260, 120, 80, 500, 300)),
+    JSON.stringify({ left: 120, top: 80, width: 300, height: 180 })
+  );
+  assert.equal(
+    JSON.stringify(api.normalizeCaptureRect(-20, 20, 700, 340, 500, 300)),
+    JSON.stringify({ left: 0, top: 20, width: 500, height: 280 })
+  );
+  assert.equal(api.isUsableCaptureRect({ left: 10, top: 10, width: 7, height: 40 }), false);
+  assert.equal(api.isUsableCaptureRect({ left: 10, top: 10, width: 80, height: 40 }), true);
 });

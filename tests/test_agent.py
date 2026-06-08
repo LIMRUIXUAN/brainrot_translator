@@ -34,6 +34,57 @@ class BrainrotAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("mock", equivalent)
         self.assertNotIn("fallback", equivalent)
 
+    async def test_non_brainrot_model_result_keeps_original_text(self) -> None:
+        selected_text = "The meeting starts at 9 AM."
+        model_payload = {
+            "is_brainrot": False,
+            "brainrot_text": None,
+            "equivalent_text": "The scheduled meeting begins at nine in the morning.",
+            "formal_explanation": "",
+            "sentiment_label": "neutral",
+            "sentiment_rationale": "Plain scheduling sentence.",
+            "confidence_score": 0.92,
+            "flagged_for_review": False,
+            "model_used": "nvidia/nemotron-3.5-content-safety:free",
+        }
+
+        with patch.object(
+            self.agent,
+            "_execute_openrouter_call",
+            AsyncMock(return_value=model_payload),
+        ):
+            result = await self.agent.analyze_highlighted_text(selected_text)
+
+        self.assertFalse(result.is_brainrot)
+        self.assertEqual(result.equivalent_text, selected_text)
+        self.assertIn("No brainrot", result.formal_explanation or "")
+
+    async def test_text_model_speed_selects_fast_or_slow_model(self) -> None:
+        calls = []
+
+        async def fake_openrouter_call(*, payload, timeout_seconds):
+            calls.append((payload["model"], timeout_seconds))
+            return {
+                "is_brainrot": True,
+                "brainrot_text": "he has rizz",
+                "equivalent_text": "He has charisma.",
+                "formal_explanation": "Rizz means charisma.",
+                "sentiment_label": "positive",
+                "sentiment_rationale": "Complimentary.",
+                "confidence_score": 0.9,
+                "flagged_for_review": False,
+                "model_used": "",
+            }
+
+        with patch.object(self.agent, "_execute_openrouter_call", fake_openrouter_call):
+            fast = await self.agent.analyze_highlighted_text("he has rizz", text_model_speed="fast")
+            slow = await self.agent.analyze_highlighted_text("he has rizz", text_model_speed="slow")
+
+        self.assertEqual(fast.model_used, self.agent.settings.openrouter_text_fast_model)
+        self.assertEqual(slow.model_used, self.agent.settings.openrouter_text_slow_model)
+        self.assertEqual(calls[0], (self.agent.settings.openrouter_text_fast_model, 12.0))
+        self.assertEqual(calls[1], (self.agent.settings.openrouter_text_slow_model, 90.0))
+
     async def test_image_timeout_returns_safe_fallback(self) -> None:
         with patch.object(
             self.agent,

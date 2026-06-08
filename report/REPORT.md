@@ -2,11 +2,15 @@
 🟥 **WIF3009 • GROUP 5** 
 
 ## 👥 Team Members - WIF3009 Group 5 
-Lim Rui Xuan	24004520
-Jayden Teh Jing Siang	23051409
-Adrian Phang 	24063588
-Edwin Tan Yu Xian	23097193
-ZOU MINGXUAN	23093996
+>Lim Rui Xuan	24004520
+
+>Jayden Teh Jing Siang	23051409
+
+>Adrian Phang 	24063588
+
+>Edwin Tan Yu Xian	23097193
+
+>ZOU MINGXUAN	23093996
 
 ## 1. Project Overview
 

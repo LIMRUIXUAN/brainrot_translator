@@ -312,18 +312,12 @@ def translate_text(text: str) -> TranslateResponse:
     )
 
 
-async def reverse_translate_text(text: str) -> ReverseTranslateResponse:
+async def reverse_translate_text(
+    text: str,
+    text_model_speed: str | None = None,
+) -> ReverseTranslateResponse:
     cleaned = text.strip()
-    local_reverse = _generate_local_reverse_translation(cleaned)
-    if local_reverse:
-        changed = local_reverse.casefold() != cleaned.casefold()
-        return ReverseTranslateResponse(
-            reverse_text=local_reverse,
-            confidence_score=0.72 if changed else 0.45,
-            model_used="local_transformer_reverse_prompt",
-        )
-
-    return await agent.reverse_translate(cleaned)
+    return await agent.reverse_translate(cleaned, text_model_speed=text_model_speed)
 
 
 def _looks_like_brainrot_text(text: str) -> bool:
@@ -470,6 +464,11 @@ def _normalise_text_key(raw: str) -> str:
     return cleaned.strip()
 
 
+def _text_model_speed_cache_key(lookup_key: str, text_model_speed: str) -> str:
+    speed = text_model_speed if text_model_speed in {"fast", "slow"} else "fast"
+    return f"{lookup_key}::text_model_speed={speed}"
+
+
 def _hash_image_payload(image_base64: str) -> str:
     """SHA-256 hex digest of the raw base64 string (after strip)."""
     return hashlib.sha256(image_base64.strip().encode("utf-8")).hexdigest()
@@ -541,6 +540,7 @@ async def _run_openrouter_text_analysis(
         page_title=request.page_title,
         page_domain=request.page_domain,
         nearest_heading=request.nearest_heading,
+        text_model_speed=request.text_model_speed,
     )
     final = _stage_low_confidence_text(request, result)
     save_cached_text(lookup_key, final.model_dump())
@@ -648,7 +648,10 @@ def create_app() -> FastAPI:
     async def reverse_translate(
         payload: ReverseTranslateRequest,
     ) -> ReverseTranslateResponse:
-        result = await reverse_translate_text(payload.text)
+        result = await reverse_translate_text(
+            payload.text,
+            text_model_speed=payload.text_model_speed,
+        )
         logger.info(
             "REVERSE TRANSLATE for %r via %s",
             payload.text[:80],
@@ -671,6 +674,7 @@ def create_app() -> FastAPI:
         payload: HighlightedTextAnalysisRequest,
     ) -> HighlightedTextAnalysisResponse:
         lookup_key = _normalise_text_key(payload.selected_text)
+        openrouter_cache_key = _text_model_speed_cache_key(lookup_key, payload.text_model_speed)
         _record_text_frequency(payload.selected_text, payload.page_url)
 
         # ── Step 1: Check local slang_terms.json ──────────────────────
@@ -688,14 +692,14 @@ def create_app() -> FastAPI:
                     "TEXT LOCAL MODEL LOW CONFIDENCE for '%s' → calling OpenRouter",
                     lookup_key,
                 )
-                return await _run_openrouter_text_analysis(payload, lookup_key)
+                return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
 
             final = _stage_low_confidence_text(payload, local_hit)
             save_cached_text(lookup_key, final.model_dump())
             return final
 
         # ── Step 3: Check PostgreSQL cache table if no local model exists
-        db_hit = _try_db_text_lookup(lookup_key)
+        db_hit = _try_db_text_lookup(openrouter_cache_key)
         if db_hit is not None:
             logger.info("TEXT CACHE HIT (database) for '%s'", lookup_key)
             if _is_low_confidence_result(db_hit):
@@ -703,12 +707,12 @@ def create_app() -> FastAPI:
                     "TEXT CACHE HIT LOW CONFIDENCE for '%s' → refreshing with OpenRouter",
                     lookup_key,
                 )
-                return await _run_openrouter_text_analysis(payload, lookup_key)
+                return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
             return db_hit
 
         # ── Step 4: Cache miss → call DeepSeek via OpenRouter ─────────
         logger.info("TEXT CACHE MISS for '%s' → calling OpenRouter", lookup_key)
-        return await _run_openrouter_text_analysis(payload, lookup_key)
+        return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
 
     @app.post(
         "/api/v1/recheck-highlighted-text",
@@ -721,9 +725,10 @@ def create_app() -> FastAPI:
         payload: HighlightedTextAnalysisRequest,
     ) -> HighlightedTextAnalysisResponse:
         lookup_key = _normalise_text_key(payload.selected_text)
+        openrouter_cache_key = _text_model_speed_cache_key(lookup_key, payload.text_model_speed)
         _record_text_frequency(payload.selected_text, payload.page_url)
         logger.info("TEXT MANUAL RECHECK for '%s' → calling OpenRouter", lookup_key)
-        return await _run_openrouter_text_analysis(payload, lookup_key)
+        return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
 
     @app.get(
         "/api/v1/dashboard/word-frequency",

@@ -118,7 +118,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(model.kwargs["num_beams"], 4)
         self.assertFalse(model.kwargs["do_sample"])
 
-    def test_reverse_translate_delegates_to_agent_when_local_model_unavailable(self) -> None:
+    def test_reverse_translate_delegates_to_agent(self) -> None:
         agent_mock = AsyncMock(
             return_value=ReverseTranslateResponse(
                 reverse_text="bro got mad rizz",
@@ -127,8 +127,7 @@ class ApiTests(unittest.TestCase):
             )
         )
 
-        with patch("api.main.get_model_components", return_value=None), \
-             patch("api.main.agent.reverse_translate", agent_mock):
+        with patch("api.main.agent.reverse_translate", agent_mock):
             response = self.client.post(
                 "/api/v1/reverse-translate",
                 json={"text": "He is very charming", "page_url": "sidepanel-direct-input"},
@@ -139,7 +138,33 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["reverse_text"], "bro got mad rizz")
         self.assertEqual(payload["confidence_score"], 0.88)
         self.assertEqual(payload["model_used"], "openrouter/test")
-        agent_mock.assert_awaited_once_with("He is very charming")
+        agent_mock.assert_awaited_once_with("He is very charming", text_model_speed="fast")
+
+    def test_reverse_translate_ignores_local_model_output(self) -> None:
+        agent_mock = AsyncMock(
+            return_value=ReverseTranslateResponse(
+                reverse_text="bro gotta lock in on the assignment rn",
+                confidence_score=0.9,
+                model_used="deepseek/deepseek-v4-flash",
+            )
+        )
+
+        with patch("api.main._generate_local_reverse_translation", return_value="Bro, have to do for assignment right now.") as local_reverse_mock, \
+             patch("api.main.agent.reverse_translate", agent_mock):
+            response = self.client.post(
+                "/api/v1/reverse-translate",
+                json={"text": "Bro, have to do for assignment right now", "page_url": "sidepanel-direct-input"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["reverse_text"], "bro gotta lock in on the assignment rn")
+        self.assertEqual(payload["model_used"], "deepseek/deepseek-v4-flash")
+        agent_mock.assert_awaited_once_with(
+            "Bro, have to do for assignment right now",
+            text_model_speed="fast",
+        )
+        local_reverse_mock.assert_not_called()
 
     def test_highlighted_text_route_stages_low_confidence_review(self) -> None:
         mocked_result = HighlightedTextAnalysisResponse(
@@ -278,9 +303,38 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["model_used"], "deepseek/deepseek-v4-flash")
         agent_mock.assert_awaited_once()
+        self.assertEqual(agent_mock.await_args.kwargs["text_model_speed"], "fast")
         slang_mock.assert_not_called()
         local_mock.assert_not_called()
         db_mock.assert_not_called()
+
+    def test_manual_recheck_endpoint_passes_slow_text_model_speed(self) -> None:
+        openrouter_result = HighlightedTextAnalysisResponse(
+            is_brainrot=True,
+            brainrot_text="he has rizz",
+            equivalent_text="He has charisma.",
+            formal_explanation="Rizz means charisma.",
+            sentiment_label="positive",
+            sentiment_rationale="Complimentary.",
+            confidence_score=0.9,
+            flagged_for_review=False,
+            model_used="nvidia/nemotron-3-super-120b-a12b:free",
+        )
+        agent_mock = AsyncMock(return_value=openrouter_result)
+
+        with patch("api.main.save_cached_text", return_value=True), \
+             patch("api.main.agent.analyze_highlighted_text", agent_mock):
+                response = self.client.post(
+                    "/api/v1/recheck-highlighted-text",
+                    json={
+                        "selected_text": "he has rizz",
+                        "text_model_speed": "slow",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["model_used"], "nvidia/nemotron-3-super-120b-a12b:free")
+        self.assertEqual(agent_mock.await_args.kwargs["text_model_speed"], "slow")
 
     def test_highlighted_text_route_uses_quality_classifier_confidence_when_available(self) -> None:
         import torch
@@ -444,7 +498,7 @@ class ApiTests(unittest.TestCase):
             formal_explanation="The meme frames the problem as self-inflicted incompetence.",
             confidence_score=0.52,
             flagged_for_review=False,
-            model_used="google/gemini-3-flash-preview",
+            model_used="nvidia/nemotron-3.5-content-safety:free",
             used_frame_fallback=False,
         )
 
@@ -474,7 +528,7 @@ class ApiTests(unittest.TestCase):
             formal_explanation="The meme frames the problem as incompetence.",
             confidence_score=0.91,
             flagged_for_review=False,
-            model_used="google/gemini-3-flash-preview",
+            model_used="nvidia/nemotron-3.5-content-safety:free",
             used_frame_fallback=False,
         )
 
@@ -502,7 +556,7 @@ class ApiTests(unittest.TestCase):
             formal_explanation="The meme signals collective public disapproval and social defeat.",
             confidence_score=0.91,
             flagged_for_review=False,
-            model_used="google/gemini-3-flash-preview",
+            model_used="nvidia/nemotron-3.5-content-safety:free",
             used_frame_fallback=True,
         )
 

@@ -1,8 +1,47 @@
 #brainrot-floating-launcher,
 #brainrot-floating-launcher *,
 #brainrot-pet-bubble,
-#brainrot-pet-bubble * {
+#brainrot-pet-bubble *,
+#brainrot-capture-overlay,
+#brainrot-capture-overlay * {
   box-sizing: border-box;
+}
+
+#brainrot-capture-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483645;
+  cursor: crosshair;
+  background: rgba(10, 15, 28, 0.24);
+  font-family: var(--bt-font-sans);
+  user-select: none;
+  touch-action: none;
+}
+
+.brainrot-capture-toolbar {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 12px;
+  border-radius: var(--bt-radius-md);
+  border: 1px solid var(--bt-accent-primary-border);
+  background: var(--bt-panel-bg);
+  color: var(--bt-text-primary);
+  box-shadow: var(--bt-shadow-sm);
+  font-size: 13px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.brainrot-capture-selection {
+  position: fixed;
+  border: 2px solid var(--bt-accent-primary);
+  background: rgba(250, 204, 21, 0.12);
+  box-shadow:
+    0 0 0 9999px rgba(10, 15, 28, 0.46),
+    inset 0 0 0 1px var(--bt-highlight-gloss);
+  pointer-events: none;
 }
 
 #brainrot-floating-launcher {

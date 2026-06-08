@@ -32,7 +32,7 @@
         <div class="onboarding-step" data-onboarding-step="3">
           <div class="onboarding-emoji">🖼️</div>
           <h2>Hover Over Meme Images</h2>
-          <p>Image and GIF hover detection can analyze likely memes from the current page.</p>
+          <p>Image hover detection can analyze likely memes from the current page.</p>
         </div>
         <div class="onboarding-dots" id="onboardingDots" aria-label="Tutorial progress"></div>
         <label class="onboarding-checkbox">
@@ -164,6 +164,13 @@
         <span>API Auth Token</span>
         <input id="apiAuthToken" type="password" spellcheck="false" autocomplete="off" placeholder="Optional bearer token" />
       </label>
+      <label class="field compact-field">
+        <span>Text Model Speed</span>
+        <select id="textModelSpeed">
+          <option value="fast">Fast - DeepSeek</option>
+          <option value="slow">Slow - NVIDIA Nemotron</option>
+        </select>
+      </label>
 
       <div class="button-row">
         <button id="saveSettingsButton" class="primary-button" type="button">Save Settings</button>
@@ -199,8 +206,8 @@
 
       <label class="toggle-row">
         <span>
-          <strong>Hover image or GIF analysis</strong>
-          <small>Run the 600ms meme hover flow for likely brainrot media.</small>
+          <strong>Hover image analysis</strong>
+          <small>Run the 600ms meme hover flow for likely brainrot images.</small>
         </span>
         <input id="enableHoverDetection" type="checkbox" />
       </label>

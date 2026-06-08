@@ -360,7 +360,7 @@ if (!window.__brainrotPetBubbleLoaded) {
               alt="Brainrot media preview"
             />
             <div>
-              <div class="brainrot-bubble-kicker">Image or GIF</div>
+              <div class="brainrot-bubble-kicker">Image</div>
               <div class="brainrot-bubble-heading">This meme means</div>
               <div class="brainrot-bubble-value">"${this.escapeHtml(meaning)}"</div>
               <details class="brainrot-bubble-details">

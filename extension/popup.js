@@ -10,6 +10,7 @@
     brainrotEnableLauncher: true,
     brainrotEnableClipboardPaste: true,
     brainrotEnableInlineAnnotation: false,
+    brainrotTextModelSpeed: "fast",
     brainrotLauncherPosition: null
   });
 
@@ -189,6 +190,10 @@
         typeof raw.brainrotEnableInlineAnnotation === "boolean"
           ? raw.brainrotEnableInlineAnnotation
           : DEFAULT_SETTINGS.brainrotEnableInlineAnnotation,
+      brainrotTextModelSpeed:
+        raw.brainrotTextModelSpeed === "slow"
+          ? "slow"
+          : DEFAULT_SETTINGS.brainrotTextModelSpeed,
       brainrotLauncherPosition:
         raw.brainrotLauncherPosition &&
         Number.isFinite(raw.brainrotLauncherPosition.left) &&
@@ -263,7 +268,8 @@
       brainrotEnableHoverDetection: elements.enableHoverDetection.checked,
       brainrotEnableLauncher: elements.enableLauncher.checked,
       brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked,
-      brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked
+      brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked,
+      brainrotTextModelSpeed: elements.textModelSpeed?.value || DEFAULT_SETTINGS.brainrotTextModelSpeed
     });
   }
 
@@ -278,6 +284,9 @@
     elements.enableLauncher.checked = settings.brainrotEnableLauncher;
     elements.enableClipboardPaste.checked = settings.brainrotEnableClipboardPaste;
     elements.enableInlineAnnotation.checked = settings.brainrotEnableInlineAnnotation;
+    if (elements.textModelSpeed) {
+      elements.textModelSpeed.value = settings.brainrotTextModelSpeed;
+    }
   }
 
   function activateSidepanelTab(tabId, { persist = true } = {}) {
@@ -375,7 +384,7 @@
     const qualityClassifierLoaded = Boolean(payload.local_quality_classifier_loaded);
     const qualityClassifierAvailable = Boolean(payload.local_quality_classifier_available);
     let modelStatus = "Glossary";
-    let modelHint = "Text uses the local glossary; image/GIF still requires OpenRouter.";
+    let modelHint = "Text uses the local glossary; image analysis still requires OpenRouter.";
     let modelTone = "warn";
 
     if (localModelLoaded) {
@@ -395,7 +404,7 @@
       modelTone = "ok";
     } else if (payload.openrouter_configured) {
       modelStatus = "OpenRouter";
-      modelHint = "Text and image/GIF analysis can use OpenRouter.";
+      modelHint = "Text and image analysis can use OpenRouter.";
       modelTone = "ok";
     }
 
@@ -720,10 +729,18 @@
     try {
       const endpoint = direction === "to-brainrot"
         ? "/api/v1/reverse-translate"
-        : "/api/v1/analyze-highlighted-text";
+        : "/api/v1/recheck-highlighted-text";
       const requestBody = direction === "to-brainrot"
-        ? { text: inputValue, page_url: "sidepanel-direct-input" }
-        : { selected_text: inputValue, page_url: "sidepanel-direct-input" };
+        ? {
+            text: inputValue,
+            page_url: "sidepanel-direct-input",
+            text_model_speed: "fast"
+          }
+        : {
+            selected_text: inputValue,
+            page_url: "sidepanel-direct-input",
+            text_model_speed: "fast"
+          };
 
       const response = await fetch(`${settings.brainrotApiBaseUrl}${endpoint}`, {
         method: "POST",
@@ -733,6 +750,14 @@
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(getApiErrorMessage(response, payload, "Backend request failed."));
+      }
+
+      if (direction === "to-english" && !payload.is_brainrot) {
+        setDirectTranslateResult(
+          payload.formal_explanation || "No brainrot detected. The text was left unchanged.",
+          "ok"
+        );
+        return;
       }
 
       const translation = direction === "to-brainrot"
@@ -767,6 +792,13 @@
       if (isConnectionFailure && direction === "to-english") {
         try {
           const payload = translateTextOffline(inputValue);
+          if (!payload.is_brainrot) {
+            setDirectTranslateResult(
+              payload.formal_explanation || "No brainrot detected. The text was left unchanged.",
+              "ok"
+            );
+            return;
+          }
           const entry = {
             timestamp: new Date().toISOString(),
             type: "text",
@@ -1319,7 +1351,8 @@
       brainrotEnableHoverDetection: elements.enableHoverDetection.checked,
       brainrotEnableLauncher: elements.enableLauncher.checked,
       brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked,
-      brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked
+      brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked,
+      brainrotTextModelSpeed: elements.textModelSpeed?.value || DEFAULT_SETTINGS.brainrotTextModelSpeed
     });
     await setStoredSettings(nextSettings);
   }
@@ -1333,6 +1366,7 @@
     elements.enableLauncher = document.getElementById("enableLauncher");
     elements.enableClipboardPaste = document.getElementById("enableClipboardPaste");
     elements.enableInlineAnnotation = document.getElementById("enableInlineAnnotation");
+    elements.textModelSpeed = document.getElementById("textModelSpeed");
     elements.saveSettingsButton = document.getElementById("saveSettingsButton");
     elements.resetDefaultsButton = document.getElementById("resetDefaultsButton");
     elements.refreshHealthButton = document.getElementById("refreshHealthButton");

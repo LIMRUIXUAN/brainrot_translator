@@ -37,6 +37,8 @@ class Settings:
     reference_dataset_path: Path
     openrouter_api_key: str | None
     openrouter_text_model: str
+    openrouter_text_fast_model: str
+    openrouter_text_slow_model: str
     openrouter_vision_model: str
     openrouter_vision_fallback_models: tuple[str, ...]
     openrouter_http_referer: str
@@ -65,12 +67,18 @@ def get_settings() -> Settings:
         openrouter_text_model=(
             os.getenv("OPENROUTER_TEXT_MODEL") or "deepseek/deepseek-v4-flash"
         ).strip(),
+        openrouter_text_fast_model=(
+            os.getenv("OPENROUTER_TEXT_FAST_MODEL") or "deepseek/deepseek-v4-flash"
+        ).strip(),
+        openrouter_text_slow_model=(
+            os.getenv("OPENROUTER_TEXT_SLOW_MODEL") or "nvidia/nemotron-3-super-120b-a12b:free"
+        ).strip(),
         openrouter_vision_model=(
             os.getenv("OPENROUTER_VISION_MODEL") or "google/gemini-3-flash-preview"
         ).strip(),
         openrouter_vision_fallback_models=_env_list(
             "OPENROUTER_VISION_FALLBACK_MODELS",
-            ("openai/gpt-4o", "anthropic/claude-3-5-sonnet"),
+            ("google/gemini-3-flash-preview",),
         ),
         openrouter_http_referer=(
             os.getenv("OPENROUTER_HTTP_REFERER")
@@ -105,3 +113,4 @@ def get_settings() -> Settings:
             os.getenv("BRAINROT_API_BASE_URL") or "http://127.0.0.1:8000"
         ).strip(),
     )
+# Trigger reload again

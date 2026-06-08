@@ -165,7 +165,8 @@ class BrainrotAgent:
             "- a sentiment_label of positive, negative, neutral, mixed, or unclear\n"
             "- a short sentiment_rationale\n"
             "- a confidence score between 0 and 1\n"
-            "When the text is not brainrot, set is_brainrot to false and still provide the safest equivalent_text possible."
+            "When the text is not brainrot, set is_brainrot to false, keep equivalent_text as the original text, "
+            "and set formal_explanation to a short sentence saying no brainrot or internet slang was detected."
         )
 
     def _build_reverse_system_prompt(self) -> str:
@@ -173,6 +174,9 @@ class BrainrotAgent:
             "You are a structured Gen Z and internet-slang rewrite engine.\n"
             "Convert normal English into natural brainrot or Gen Z internet English without adding unrelated facts.\n"
             "Keep the user's core meaning, tone, and intent. Prefer current slang only when it fits.\n"
+            "Always produce a meaningful rewrite that is visibly different from the source sentence while preserving meaning.\n"
+            "Use casual internet phrasing such as bro, no cap, lowkey, highkey, cooked, aura, L, W, rizz, valid, or goated only when contextually suitable.\n"
+            "Do not simply copy the source text, only add punctuation, or make a tiny grammar-only edit.\n"
             "Return JSON only with reverse_text, confidence_score, and model_used.\n"
             "Keep reverse_text concise and readable, not an overloaded list of slang terms."
         )
@@ -258,6 +262,21 @@ class BrainrotAgent:
     ) -> HighlightedTextAnalysisResponse:
         confidence = max(0.0, min(1.0, float(result.confidence_score)))
         flagged = confidence < self.settings.low_confidence_threshold
+        if not result.is_brainrot:
+            return HighlightedTextAnalysisResponse(
+                is_brainrot=False,
+                brainrot_text=selected_text,
+                equivalent_text=selected_text,
+                formal_explanation=(
+                    _trim_text(result.formal_explanation)
+                    or "No brainrot or internet slang marker was detected, so the text was left unchanged."
+                ),
+                sentiment_label=result.sentiment_label,
+                sentiment_rationale=_trim_text(result.sentiment_rationale),
+                confidence_score=confidence,
+                flagged_for_review=flagged,
+                model_used=model_used,
+            )
         return HighlightedTextAnalysisResponse(
             is_brainrot=bool(result.is_brainrot),
             brainrot_text=_trim_text(result.brainrot_text) or selected_text,
@@ -356,10 +375,21 @@ class BrainrotAgent:
             model_used="heuristic_reverse_fallback",
         )
 
-    async def reverse_translate(self, text: str) -> ReverseTranslateResponse:
+    def _resolve_text_model(self, text_model_speed: str | None = None) -> tuple[str, float]:
+        speed = (text_model_speed or "fast").strip().casefold()
+        if speed == "slow":
+            return self.settings.openrouter_text_slow_model, 90.0
+        return self.settings.openrouter_text_fast_model, 12.0
+
+    async def reverse_translate(
+        self,
+        text: str,
+        text_model_speed: str | None = None,
+    ) -> ReverseTranslateResponse:
         cleaned = text.strip()
+        model, timeout_seconds = self._resolve_text_model(text_model_speed)
         payload = {
-            "model": self.settings.openrouter_text_model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": self._build_reverse_system_prompt()},
                 {
@@ -379,12 +409,12 @@ class BrainrotAgent:
         }
 
         try:
-            parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=8.0)
+            parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=timeout_seconds)
             result = ReverseTranslateResponse.model_validate(parsed)
             return ReverseTranslateResponse(
                 reverse_text=_trim_text(result.reverse_text) or cleaned,
                 confidence_score=max(0.0, min(1.0, float(result.confidence_score))),
-                model_used=result.model_used or self.settings.openrouter_text_model,
+                model_used=result.model_used or model,
             )
         except Exception:
             logger.exception("Reverse translation model failed for text=%r", cleaned[:120])
@@ -398,9 +428,11 @@ class BrainrotAgent:
         page_title: Optional[str] = None,
         page_domain: Optional[str] = None,
         nearest_heading: Optional[str] = None,
+        text_model_speed: str | None = None,
     ) -> HighlightedTextAnalysisResponse:
+        model, timeout_seconds = self._resolve_text_model(text_model_speed)
         payload = {
-            "model": self.settings.openrouter_text_model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": self._build_text_system_prompt()},
                 {
@@ -427,12 +459,12 @@ class BrainrotAgent:
         }
 
         try:
-            parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=8.0)
+            parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=timeout_seconds)
             result = HighlightedTextAnalysisResponse.model_validate(parsed)
             return self._normalize_text_result(
                 result,
                 selected_text=selected_text,
-                model_used=self.settings.openrouter_text_model,
+                model_used=model,
             )
         except httpx.TimeoutException:
             return self._heuristic_text_fallback(selected_text)

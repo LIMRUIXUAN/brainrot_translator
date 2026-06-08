@@ -167,7 +167,7 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             formal_explanation="Cached image interpretation.",
             confidence_score=0.88,
             flagged_for_review=False,
-            model_used="cached:google/gemini-3-flash-preview",
+            model_used="cached:google/nvidia/nemotron-3.5-content-safety:free",
             used_frame_fallback=False,
         )
         openrouter = AsyncMock()
@@ -185,7 +185,7 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["model_used"], "cached:google/gemini-3-flash-preview")
+        self.assertEqual(response.json()["model_used"], "cached:nvidia/nemotron-3.5-content-safety:free")
         openrouter.assert_not_awaited()
         save_mock.assert_not_called()
 

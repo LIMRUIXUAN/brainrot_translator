@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Brainrot Translator",
   "version": "2.0.0",
-  "description": "Detects brainrot text and image/GIF meme semantics on the web.",
+  "description": "Detects brainrot text and image meme semantics on the web.",
   "permissions": [
     "activeTab",
     "contextMenus",

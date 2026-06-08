@@ -16,6 +16,7 @@ if (!window.__brainrotContentScriptLoaded) {
     brainrotEnableLauncher: true,
     brainrotEnableClipboardPaste: true,
     brainrotEnableInlineAnnotation: false,
+    brainrotTextModelSpeed: "fast",
     brainrotLauncherPosition: null,
     brainrotLauncherScale: 1,
     brainrotLauncherMinimized: false
@@ -301,6 +302,10 @@ if (!window.__brainrotContentScriptLoaded) {
         typeof raw.brainrotEnableInlineAnnotation === "boolean"
           ? raw.brainrotEnableInlineAnnotation
           : DEFAULT_SETTINGS.brainrotEnableInlineAnnotation,
+      brainrotTextModelSpeed:
+        raw.brainrotTextModelSpeed === "slow"
+          ? "slow"
+          : DEFAULT_SETTINGS.brainrotTextModelSpeed,
       brainrotLauncherPosition:
         raw.brainrotLauncherPosition &&
         Number.isFinite(raw.brainrotLauncherPosition.left) &&
@@ -684,6 +689,28 @@ if (!window.__brainrotContentScriptLoaded) {
     return hasMemeHost(url) || hasKeywordHint(url) || hasMemeLikeAspectRatio(element);
   }
 
+  function clampCaptureCoordinate(value, maxValue) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.min(Math.max(numeric, 0), Math.max(0, maxValue));
+  }
+
+  function normalizeCaptureRect(startX, startY, endX, endY, viewportWidth = window.innerWidth, viewportHeight = window.innerHeight) {
+    const x1 = clampCaptureCoordinate(startX, viewportWidth);
+    const y1 = clampCaptureCoordinate(startY, viewportHeight);
+    const x2 = clampCaptureCoordinate(endX, viewportWidth);
+    const y2 = clampCaptureCoordinate(endY, viewportHeight);
+    const left = Math.min(x1, x2);
+    const top = Math.min(y1, y2);
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
+    return { left, top, width, height };
+  }
+
+  function isUsableCaptureRect(rect) {
+    return Boolean(rect && rect.width >= 8 && rect.height >= 8);
+  }
+
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       normalizeSettings,
@@ -692,6 +719,9 @@ if (!window.__brainrotContentScriptLoaded) {
       hasKeywordHint,
       lookupCustomDictionary,
       getMediaType,
+      getGifFrameExtractionSource,
+      normalizeCaptureRect,
+      isUsableCaptureRect,
       translateTextOffline,
       setOfflineGlossaryForTest(entries) {
         offlineGlossary = Array.isArray(entries) ? entries : [];
@@ -727,6 +757,10 @@ if (!window.__brainrotContentScriptLoaded) {
     });
   }
 
+  function getGifFrameExtractionSource(fetched, sourceUrl) {
+    return fetched?.dataUrl || sourceUrl;
+  }
+
   async function buildFirstFrameFromSource(src, fallbackWidth = 320, fallbackHeight = 180) {
     const image = await loadImageFromSource(src);
     const canvas = document.createElement("canvas");
@@ -739,6 +773,14 @@ if (!window.__brainrotContentScriptLoaded) {
     context.drawImage(image, 0, 0, width, height);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
     return { dataUrl, base64: dataUrlToBase64(dataUrl), mediaType: "image/jpeg" };
+  }
+
+  async function tryBuildFirstFrameFromSource(src) {
+    try {
+      return await buildFirstFrameFromSource(src);
+    } catch (error) {
+      return null;
+    }
   }
 
   async function fetchMediaAsset(url) {
@@ -781,6 +823,141 @@ if (!window.__brainrotContentScriptLoaded) {
     });
   }
 
+  async function cropDataUrlToRect(dataUrl, rect) {
+    const image = await loadImageFromSource(dataUrl);
+    const viewportWidth = Math.max(1, window.innerWidth || rect.width);
+    const viewportHeight = Math.max(1, window.innerHeight || rect.height);
+    const scaleX = (image.naturalWidth || viewportWidth) / viewportWidth;
+    const scaleY = (image.naturalHeight || viewportHeight) / viewportHeight;
+    const sourceX = Math.max(0, Math.round(rect.left * scaleX));
+    const sourceY = Math.max(0, Math.round(rect.top * scaleY));
+    const sourceWidth = Math.min(
+      Math.max(1, Math.round(rect.width * scaleX)),
+      Math.max(1, (image.naturalWidth || viewportWidth) - sourceX)
+    );
+    const sourceHeight = Math.min(
+      Math.max(1, Math.round(rect.height * scaleY)),
+      Math.max(1, (image.naturalHeight || viewportHeight) - sourceY)
+    );
+
+    const canvas = document.createElement("canvas");
+    canvas.width = sourceWidth;
+    canvas.height = sourceHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas is unavailable for screenshot cropping.");
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      sourceWidth,
+      sourceHeight
+    );
+    return canvas.toDataURL("image/png");
+  }
+
+  function updateCaptureSelectionBox(selection, rect) {
+    selection.style.left = `${rect.left}px`;
+    selection.style.top = `${rect.top}px`;
+    selection.style.width = `${rect.width}px`;
+    selection.style.height = `${rect.height}px`;
+  }
+
+  async function requestCaptureRegion() {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.id = "brainrot-capture-overlay";
+      overlay.innerHTML = `
+        <div class="brainrot-capture-toolbar">Select area</div>
+        <div class="brainrot-capture-selection" hidden></div>
+      `;
+      document.body.appendChild(overlay);
+
+      const selection = overlay.querySelector(".brainrot-capture-selection");
+      let start = null;
+      let cleanedUp = false;
+
+      function cleanup(result) {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        window.removeEventListener("keydown", onKeyDown, true);
+        overlay.remove();
+        resolve(result);
+      }
+
+      function onKeyDown(event) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          cleanup(null);
+        }
+      }
+
+      overlay.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        start = { x: event.clientX, y: event.clientY };
+        const rect = normalizeCaptureRect(start.x, start.y, event.clientX, event.clientY);
+        selection.hidden = false;
+        updateCaptureSelectionBox(selection, rect);
+        overlay.setPointerCapture?.(event.pointerId);
+        event.preventDefault();
+      });
+
+      overlay.addEventListener("pointermove", (event) => {
+        if (!start) return;
+        updateCaptureSelectionBox(
+          selection,
+          normalizeCaptureRect(start.x, start.y, event.clientX, event.clientY)
+        );
+      });
+
+      overlay.addEventListener("pointerup", (event) => {
+        if (!start) return;
+        const rect = normalizeCaptureRect(start.x, start.y, event.clientX, event.clientY);
+        start = null;
+        cleanup(isUsableCaptureRect(rect) ? rect : null);
+      });
+
+      overlay.addEventListener("pointercancel", () => {
+        start = null;
+        cleanup(null);
+      });
+
+      window.addEventListener("keydown", onKeyDown, true);
+    });
+  }
+
+  async function createCroppedVisibleTabPayload(hiddenElement) {
+    const previousVisibility = hiddenElement?.style?.visibility;
+    if (hiddenElement?.style) {
+      hiddenElement.style.visibility = "hidden";
+    }
+
+    try {
+      const rect = await requestCaptureRegion();
+      if (!rect) return null;
+      const screenshotDataUrl = await captureVisibleTab();
+      const croppedDataUrl = await cropDataUrlToRect(screenshotDataUrl, rect);
+      const ctx = getPageContext();
+      return {
+        image_base64: dataUrlToBase64(croppedDataUrl),
+        media_type: "image/png",
+        source_url: window.location.href,
+        frame0_base64: null,
+        frame0_media_type: null,
+        previewSrc: croppedDataUrl,
+        page_title: ctx.page_title,
+        page_domain: ctx.page_domain
+      };
+    } finally {
+      if (hiddenElement?.style) {
+        hiddenElement.style.visibility = previousVisibility || "";
+      }
+    }
+  }
+
   async function createMediaUrlPayload(sourceUrl) {
     if (!sourceUrl) throw new Error("Media URL not found.");
     const mediaType = getMediaType(sourceUrl);
@@ -792,10 +969,14 @@ if (!window.__brainrotContentScriptLoaded) {
       page_title: ctx.page_title, page_domain: ctx.page_domain
     };
     if (mediaType === "image/gif") {
-      const firstFrame = await buildFirstFrameFromSource(sourceUrl);
-      payload.frame0_base64 = firstFrame.base64;
-      payload.frame0_media_type = firstFrame.mediaType;
-      payload.previewSrc = firstFrame.dataUrl;
+      const firstFrame = await tryBuildFirstFrameFromSource(
+        getGifFrameExtractionSource(fetched, sourceUrl)
+      );
+      if (firstFrame) {
+        payload.frame0_base64 = firstFrame.base64;
+        payload.frame0_media_type = firstFrame.mediaType;
+        payload.previewSrc = firstFrame.dataUrl;
+      }
     }
     return payload;
   }
@@ -813,16 +994,18 @@ if (!window.__brainrotContentScriptLoaded) {
       page_title: ctx.page_title, page_domain: ctx.page_domain
     };
     if (payload.media_type === "image/gif") {
-      const firstFrame = await buildFirstFrameFromSource(dataUrl);
-      payload.frame0_base64 = firstFrame.base64;
-      payload.frame0_media_type = firstFrame.mediaType;
-      payload.previewSrc = firstFrame.dataUrl;
+      const firstFrame = await tryBuildFirstFrameFromSource(dataUrl);
+      if (firstFrame) {
+        payload.frame0_base64 = firstFrame.base64;
+        payload.frame0_media_type = firstFrame.mediaType;
+        payload.previewSrc = firstFrame.dataUrl;
+      }
     }
     return payload;
   }
 
   async function analyzeMediaPayload(anchor, payload) {
-    bubble.showLoadingState(anchor, "Analyzing screenshot or GIF...");
+    bubble.showLoadingState(anchor, "Analyzing image...");
     try {
       const result = await postJson(MEDIA_ENDPOINT, {
         image_base64: payload.image_base64, media_type: payload.media_type,
@@ -952,6 +1135,7 @@ if (!window.__brainrotContentScriptLoaded) {
       const result = await postJson(TEXT_ENDPOINT, {
         selected_text: selectionData.selectedText,
         page_url: ctx.page_url,
+        text_model_speed: runtimeSettings.brainrotTextModelSpeed,
         surrounding_text: selectionData.surroundingText,
         page_title: ctx.page_title,
         page_domain: ctx.page_domain,
@@ -1027,12 +1211,13 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   async function runSelectionRecheck(selectionData) {
-    bubble.showLoadingState(selectionData.rect, "Rechecking highlighted text with DeepSeek...");
+    bubble.showLoadingState(selectionData.rect, "Rechecking highlighted text...");
     const ctx = getPageContext();
     try {
       const result = await postJson(RECHECK_TEXT_ENDPOINT, {
         selected_text: selectionData.selectedText,
         page_url: ctx.page_url,
+        text_model_speed: runtimeSettings.brainrotTextModelSpeed,
         surrounding_text: selectionData.surroundingText,
         page_title: ctx.page_title,
         page_domain: ctx.page_domain,
@@ -1043,7 +1228,7 @@ if (!window.__brainrotContentScriptLoaded) {
         bubble.showInfo(
           selectionData.rect,
           usedFallback ? "Recheck Unavailable" : "Recheck Complete",
-          result.formal_explanation || result.equivalent_text || "DeepSeek did not classify the text as brainrot.",
+          result.formal_explanation || result.equivalent_text || "The selected model did not classify the text as brainrot.",
           "Recheck Again",
           async () => { await runSelectionRecheck(selectionData); }
         );
@@ -1064,7 +1249,7 @@ if (!window.__brainrotContentScriptLoaded) {
         error instanceof TypeError;
 
       if (isConnectionFailure) {
-        bubble.showError(selectionData.rect, "Recheck unavailable: DeepSeek recheck requires backend connection.");
+        bubble.showError(selectionData.rect, "Recheck unavailable: backend connection required.");
       } else {
         bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text recheck failed.");
       }
@@ -1230,8 +1415,6 @@ if (!window.__brainrotContentScriptLoaded) {
           </div>
         </div>
         <div class="brainrot-launcher-actions">
-          <button type="button" class="brainrot-launcher-button brainrot-launcher-button--primary" data-brainrot-scan>Scan Page</button>
-          <button type="button" class="brainrot-launcher-button brainrot-launcher-button--secondary" data-brainrot-clear-highlights>Clear</button>
           <button type="button" class="brainrot-launcher-button brainrot-launcher-button--secondary" data-brainrot-capture>Capture</button>
           <button type="button" class="brainrot-launcher-button brainrot-launcher-button--toggle" data-brainrot-toggle-hover></button>
         </div>
@@ -1244,8 +1427,6 @@ if (!window.__brainrotContentScriptLoaded) {
     `;
 
     const captureButton = dock.querySelector("[data-brainrot-capture]");
-    const scanButton = dock.querySelector("[data-brainrot-scan]");
-    const clearHighlightsButton = dock.querySelector("[data-brainrot-clear-highlights]");
     const hoverToggle = dock.querySelector("[data-brainrot-toggle-hover]");
     const scaleDownButton = dock.querySelector("[data-brainrot-scale-down]");
     const scaleUpButton = dock.querySelector("[data-brainrot-scale-up]");
@@ -1253,43 +1434,14 @@ if (!window.__brainrotContentScriptLoaded) {
     const restoreBar = dock.querySelector("[data-brainrot-restore]");
     const dragHandle = dock.querySelector(".brainrot-launcher-brand");
 
-    scanButton.addEventListener("click", async () => {
-      scanButton.disabled = true;
-      const originalText = scanButton.textContent;
-      scanButton.textContent = "Scanning...";
-      try {
-        const count = await scanPageForBrainrot();
-        bubble.showTimedInfo(
-          dock,
-          count > 0 ? "Page Scan Complete" : "No Terms Found",
-          count > 0 ? `Highlighted ${count} brainrot term${count === 1 ? "" : "s"} on this page.` : "No recognized brainrot terms were visible on this page.",
-          4
-        );
-      } catch (error) {
-        bubble.showError(dock, error instanceof Error ? error.message : "Page scan failed.");
-      } finally {
-        scanButton.disabled = false;
-        scanButton.textContent = originalText;
-      }
-    });
-    clearHighlightsButton.addEventListener("click", () => {
-      const count = clearPageHighlights();
-      bubble.showTimedInfo(
-        dock,
-        "Highlights Cleared",
-        count > 0 ? `Removed ${count} inline highlight${count === 1 ? "" : "s"}.` : "There were no page highlights to clear.",
-        3
-      );
-    });
     captureButton.addEventListener("click", async () => {
       try {
-        const dataUrl = await captureVisibleTab();
-        const ctx = getPageContext();
-        const payload = {
-          image_base64: dataUrlToBase64(dataUrl), media_type: "image/png",
-          source_url: window.location.href, frame0_base64: null, frame0_media_type: null,
-          previewSrc: dataUrl, page_title: ctx.page_title, page_domain: ctx.page_domain
-        };
+        bubble.hide();
+        const payload = await createCroppedVisibleTabPayload(dock);
+        if (!payload) {
+          bubble.showTimedInfo(dock, "Capture Cancelled", "No screenshot area selected.", 2);
+          return;
+        }
         await analyzeMediaPayload(dock, payload);
       } catch (error) {
         bubble.showError(dock, error instanceof Error ? error.message : "Screenshot capture failed.");

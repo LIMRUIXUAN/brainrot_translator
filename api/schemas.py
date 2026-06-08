@@ -40,6 +40,7 @@ class ReverseTranslateRequest(BaseModel):
 
     text: str = Field(..., min_length=1)
     page_url: Optional[str] = None
+    text_model_speed: Literal["fast", "slow"] = "fast"
 
     @field_validator("text")
     @classmethod
@@ -70,6 +71,7 @@ class HighlightedTextAnalysisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     selected_text: str = Field(..., min_length=1)
+    text_model_speed: Literal["fast", "slow"] = "fast"
     page_url: Optional[str] = None
     surrounding_text: Optional[str] = None
     page_title: Optional[str] = None
