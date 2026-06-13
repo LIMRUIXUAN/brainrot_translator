@@ -4,6 +4,7 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 function loadContentScriptApi() {
+  const sharedSource = fs.readFileSync("extension/shared.js", "utf8");
   const source = fs.readFileSync("extension/content_script.js", "utf8");
   const module = { exports: {} };
   const window = {
@@ -15,6 +16,16 @@ function loadContentScriptApi() {
     location: { href: "https://example.test/articles/post" }
   };
   const document = {};
+
+  vm.runInNewContext(
+    sharedSource,
+    {
+      module: { exports: {} },
+      window,
+      globalThis: window
+    },
+    { filename: "extension/shared.js" }
+  );
 
   vm.runInNewContext(
     source,

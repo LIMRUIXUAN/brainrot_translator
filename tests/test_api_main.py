@@ -11,6 +11,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import api.main as api_main
+
+
+USER_OPENROUTER_HEADERS = {"X-OpenRouter-API-Key": "user-key"}
 from api import database
 from api.main import app
 from api.schemas import HighlightedTextAnalysisResponse, ImageAnalysisResponse, ReverseTranslateResponse
@@ -33,31 +36,26 @@ class ApiTests(unittest.TestCase):
         self.assertIn("database_configured", payload)
         self.assertIn("text_recheck_configured", payload)
 
-    def test_auth_token_is_required_when_configured_except_health(self) -> None:
-        hardened_settings = replace(api_main.settings, api_auth_token="secret-token")
+    def test_health_reports_user_openrouter_key_header(self) -> None:
+        missing = self.client.get("/health")
+        present = self.client.get(
+            "/health",
+            headers={"X-OpenRouter-API-Key": "user-key"},
+        )
 
-        with patch("api.main.settings", hardened_settings), \
-             patch("api.main.get_dashboard_stats", return_value={
-                 "total_text_analyses": 0,
-                 "total_image_analyses": 0,
-                 "unique_terms": 0,
-                 "top_term": None,
-                 "top_term_count": 0,
-             }):
-            self.assertEqual(self.client.get("/health").status_code, 200)
-            missing = self.client.get("/api/v1/dashboard/stats")
-            wrong = self.client.get(
-                "/api/v1/dashboard/stats",
-                headers={"Authorization": "Bearer wrong-token"},
-            )
-            accepted = self.client.get(
-                "/api/v1/dashboard/stats",
-                headers={"Authorization": "Bearer secret-token"},
-            )
+        self.assertEqual(missing.status_code, 200)
+        self.assertEqual(present.status_code, 200)
+        self.assertFalse(missing.json()["user_openrouter_key_present"])
+        self.assertTrue(present.json()["user_openrouter_key_present"])
 
-        self.assertEqual(missing.status_code, 401)
-        self.assertEqual(wrong.status_code, 401)
-        self.assertEqual(accepted.status_code, 200)
+    def test_reverse_translate_requires_user_openrouter_key(self) -> None:
+        response = self.client.post(
+            "/api/v1/reverse-translate",
+            json={"text": "He is charming"},
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("OpenRouter API key", response.json()["detail"])
 
     def test_dashboard_rate_limit_is_configurable(self) -> None:
         limited_settings = replace(api_main.settings, rate_limit_dashboard="1/minute")
@@ -131,6 +129,7 @@ class ApiTests(unittest.TestCase):
             response = self.client.post(
                 "/api/v1/reverse-translate",
                 json={"text": "He is very charming", "page_url": "sidepanel-direct-input"},
+                headers=USER_OPENROUTER_HEADERS,
             )
 
         self.assertEqual(response.status_code, 200)
@@ -138,7 +137,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["reverse_text"], "bro got mad rizz")
         self.assertEqual(payload["confidence_score"], 0.88)
         self.assertEqual(payload["model_used"], "openrouter/test")
-        agent_mock.assert_awaited_once_with("He is very charming", text_model_speed="fast")
+        agent_mock.assert_awaited_once_with(
+            "He is very charming",
+            text_model_speed="fast",
+            openrouter_api_key="user-key",
+        )
 
     def test_reverse_translate_ignores_local_model_output(self) -> None:
         agent_mock = AsyncMock(
@@ -154,6 +157,7 @@ class ApiTests(unittest.TestCase):
             response = self.client.post(
                 "/api/v1/reverse-translate",
                 json={"text": "Bro, have to do for assignment right now", "page_url": "sidepanel-direct-input"},
+                headers=USER_OPENROUTER_HEADERS,
             )
 
         self.assertEqual(response.status_code, 200)
@@ -163,6 +167,7 @@ class ApiTests(unittest.TestCase):
         agent_mock.assert_awaited_once_with(
             "Bro, have to do for assignment right now",
             text_model_speed="fast",
+            openrouter_api_key="user-key",
         )
         local_reverse_mock.assert_not_called()
 
@@ -193,6 +198,7 @@ class ApiTests(unittest.TestCase):
                         "page_url": "https://example.com",
                         "surrounding_text": "some context"
                     },
+                    headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
@@ -222,6 +228,7 @@ class ApiTests(unittest.TestCase):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
                     json={"selected_text": "he has rizz"},
+                    headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
@@ -265,6 +272,7 @@ class ApiTests(unittest.TestCase):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
                     json={"selected_text": "he has rizz"},
+                    headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
@@ -298,6 +306,7 @@ class ApiTests(unittest.TestCase):
                         "selected_text": "skill issue",
                         "page_url": "https://example.com",
                     },
+                    headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
@@ -330,6 +339,7 @@ class ApiTests(unittest.TestCase):
                         "selected_text": "he has rizz",
                         "text_model_speed": "slow",
                     },
+                    headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
@@ -514,6 +524,7 @@ class ApiTests(unittest.TestCase):
                         "media_type": "image/png",
                         "source_url": "https://example.com/skill-issue.png",
                     },
+                    headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
@@ -543,6 +554,7 @@ class ApiTests(unittest.TestCase):
                         "media_type": "image/png",
                         "source_url": "https://example.com/skill-issue.png",
                     },
+                    headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
@@ -570,6 +582,7 @@ class ApiTests(unittest.TestCase):
                     "frame0_base64": base64.b64encode(b"frame-zero").decode("ascii"),
                     "frame0_media_type": "image/jpeg",
                 },
+                headers=USER_OPENROUTER_HEADERS,
             )
 
         self.assertEqual(response.status_code, 200)

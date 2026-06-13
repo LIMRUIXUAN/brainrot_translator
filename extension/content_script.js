@@ -2,22 +2,14 @@ if (!window.__brainrotContentScriptLoaded) {
   window.__brainrotContentScriptLoaded = true;
 
   (function () {
-  const DEFAULT_API_BASE = "http://127.0.0.1:8000";
+  const Shared = window.BrainrotShared;
+  const DEFAULT_API_BASE = Shared.DEFAULT_API_BASE;
   const TEXT_ENDPOINT = "/api/v1/analyze-highlighted-text";
   const RECHECK_TEXT_ENDPOINT = "/api/v1/recheck-highlighted-text";
   const MEDIA_ENDPOINT = "/api/v1/analyze-screenshot-media";
   const HOVER_DELAY_MS = 600;
   const DEFAULT_SETTINGS = Object.freeze({
-    brainrotApiBaseUrl: DEFAULT_API_BASE,
-    brainrotApiAuthToken: "",
-    brainrotEnableTextSelection: true,
-    brainrotConfirmTextSelection: true,
-    brainrotEnableHoverDetection: true,
-    brainrotEnableLauncher: true,
-    brainrotEnableClipboardPaste: true,
-    brainrotEnableInlineAnnotation: false,
-    brainrotTextModelSpeed: "fast",
-    brainrotLauncherPosition: null,
+    ...Shared.BASE_DEFAULT_SETTINGS,
     brainrotLauncherScale: 1,
     brainrotLauncherMinimized: false
   });
@@ -116,121 +108,7 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   function translateTextOffline(text) {
-    const cleaned = text.trim();
-    if (!cleaned) {
-      return {
-        is_brainrot: false,
-        brainrot_text: null,
-        equivalent_text: "",
-        formal_explanation: "Empty text.",
-        sentiment_label: "unclear",
-        confidence_score: 0.0,
-        flagged_for_review: false,
-        model_used: "client_offline_glossary"
-      };
-    }
-
-    const lowered = cleaned.toLowerCase();
-    
-    // First, check exact match (case-insensitive)
-    const exactMatches = offlineGlossary.filter(
-      (entry) => String(entry.term || "").toLowerCase().trim() === lowered
-    );
-    if (exactMatches.length > 0) {
-      const match = exactMatches[0];
-      return {
-        is_brainrot: true,
-        brainrot_text: match.term,
-        equivalent_text: match.meaning,
-        formal_explanation: `Matched exact term "${match.term}" offline.`,
-        sentiment_label: "neutral",
-        confidence_score: 0.8,
-        flagged_for_review: false,
-        model_used: "client_offline_glossary"
-      };
-    }
-
-    // Substring lookup matching Python logic
-    const matched = [];
-    const sortedGlossary = [...offlineGlossary].sort((a, b) => {
-      return String(b.term || "").length - String(a.term || "").length;
-    });
-
-    for (const entry of sortedGlossary) {
-      const term = String(entry.term || "").trim();
-      const meaning = String(entry.meaning || "").trim();
-      if (!term || !meaning) continue;
-      const normalizedTerm = term.toLowerCase();
-      if (normalizedTerm.length < 2) continue;
-
-      try {
-        const pattern = new RegExp(`(?<!\\w)${escapeRegExp(normalizedTerm)}(?!\\w)`, "i");
-        if (pattern.test(lowered)) {
-          matched.push({ term, meaning });
-        }
-      } catch (e) {
-        const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "i");
-        if (pattern.test(lowered)) {
-          matched.push({ term, meaning });
-        }
-      }
-    }
-
-    if (matched.length > 0) {
-      let normal = cleaned;
-      if (matched.length === 1 && matched[0].term.toLowerCase().trim() === lowered) {
-        normal = matched[0].meaning;
-      } else {
-        let substituted = cleaned;
-        const termsExplained = [];
-
-        for (const entry of sortedGlossary) {
-          const term = String(entry.term || "").trim();
-          const meaning = String(entry.meaning || "").trim();
-          if (!term || !meaning) continue;
-          const normalizedTerm = term.toLowerCase();
-          if (normalizedTerm.length < 2) continue;
-
-          const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "gi");
-          if (pattern.test(substituted)) {
-            pattern.lastIndex = 0;
-            const cleanMeaning = meaning.trim().replace(/\.+$/, "");
-            substituted = substituted.replace(pattern, `[${cleanMeaning}]`);
-            termsExplained.push(`${term}: ${cleanMeaning}`);
-          }
-        }
-
-        if (termsExplained.length > 0) {
-          substituted = substituted.replace(/\s+/g, " ").trim();
-          normal = substituted;
-        } else {
-          const explanations = matched.slice(0, 4).map(m => `${m.term}: ${m.meaning}`);
-          normal = "Possible meaning: " + explanations.join(" | ");
-        }
-      }
-
-      return {
-        is_brainrot: true,
-        brainrot_text: matched.map(m => m.term).join(", "),
-        equivalent_text: normal,
-        formal_explanation: "Offline translation (glossary lookup).",
-        sentiment_label: "neutral",
-        confidence_score: 0.8,
-        flagged_for_review: false,
-        model_used: "client_offline_glossary"
-      };
-    }
-
-    return {
-      is_brainrot: false,
-      brainrot_text: null,
-      equivalent_text: cleaned,
-      formal_explanation: "No brainrot detected (Offline glossary check).",
-      sentiment_label: "unclear",
-      confidence_score: 0.8,
-      flagged_for_review: false,
-      model_used: "client_offline_glossary"
-    };
+    return Shared.translateTextOffline(text, offlineGlossary);
   }
 
   /* ── Extension context helpers ───────────────────────────────── */
@@ -266,61 +144,10 @@ if (!window.__brainrotContentScriptLoaded) {
 
   /* ── Settings ────────────────────────────────────────────────── */
   function normalizeSettings(rawSettings) {
-    const raw = rawSettings || {};
-    const apiBaseUrl =
-      typeof raw.brainrotApiBaseUrl === "string" && raw.brainrotApiBaseUrl.trim()
-        ? raw.brainrotApiBaseUrl.trim()
-        : DEFAULT_API_BASE;
-
-    return {
-      brainrotApiBaseUrl: apiBaseUrl.replace(/\/+$/, ""),
-      brainrotApiAuthToken:
-        typeof raw.brainrotApiAuthToken === "string"
-          ? raw.brainrotApiAuthToken.trim()
-          : DEFAULT_SETTINGS.brainrotApiAuthToken,
-      brainrotEnableTextSelection:
-        typeof raw.brainrotEnableTextSelection === "boolean"
-          ? raw.brainrotEnableTextSelection
-          : DEFAULT_SETTINGS.brainrotEnableTextSelection,
-      brainrotConfirmTextSelection:
-        typeof raw.brainrotConfirmTextSelection === "boolean"
-          ? raw.brainrotConfirmTextSelection
-          : DEFAULT_SETTINGS.brainrotConfirmTextSelection,
-      brainrotEnableHoverDetection:
-        typeof raw.brainrotEnableHoverDetection === "boolean"
-          ? raw.brainrotEnableHoverDetection
-          : DEFAULT_SETTINGS.brainrotEnableHoverDetection,
-      brainrotEnableLauncher:
-        typeof raw.brainrotEnableLauncher === "boolean"
-          ? raw.brainrotEnableLauncher
-          : DEFAULT_SETTINGS.brainrotEnableLauncher,
-      brainrotEnableClipboardPaste:
-        typeof raw.brainrotEnableClipboardPaste === "boolean"
-          ? raw.brainrotEnableClipboardPaste
-          : DEFAULT_SETTINGS.brainrotEnableClipboardPaste,
-      brainrotEnableInlineAnnotation:
-        typeof raw.brainrotEnableInlineAnnotation === "boolean"
-          ? raw.brainrotEnableInlineAnnotation
-          : DEFAULT_SETTINGS.brainrotEnableInlineAnnotation,
-      brainrotTextModelSpeed:
-        raw.brainrotTextModelSpeed === "slow"
-          ? "slow"
-          : DEFAULT_SETTINGS.brainrotTextModelSpeed,
-      brainrotLauncherPosition:
-        raw.brainrotLauncherPosition &&
-        Number.isFinite(raw.brainrotLauncherPosition.left) &&
-        Number.isFinite(raw.brainrotLauncherPosition.top)
-          ? {
-              left: Math.round(raw.brainrotLauncherPosition.left),
-              top: Math.round(raw.brainrotLauncherPosition.top)
-            }
-          : DEFAULT_SETTINGS.brainrotLauncherPosition,
-      brainrotLauncherScale: clampLauncherScale(raw.brainrotLauncherScale),
-      brainrotLauncherMinimized:
-        typeof raw.brainrotLauncherMinimized === "boolean"
-          ? raw.brainrotLauncherMinimized
-          : DEFAULT_SETTINGS.brainrotLauncherMinimized
-    };
+    return Shared.normalizeSettings(rawSettings, {
+      defaults: DEFAULT_SETTINGS,
+      clampLauncherScale
+    });
   }
 
   function clampLauncherScale(value) {
@@ -375,27 +202,19 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   function buildApiHeaders() {
-    const headers = { "Content-Type": "application/json" };
-    const token = String(runtimeSettings.brainrotApiAuthToken || "").trim();
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    return headers;
+    return Shared.buildApiHeaders(runtimeSettings, true);
+  }
+
+  function hasOpenRouterApiKey() {
+    return Shared.hasOpenRouterApiKey(runtimeSettings);
   }
 
   function getApiErrorMessage(response, body) {
-    if (response.status === 429) {
-      return "Please wait before trying again. The backend rate limit was reached.";
-    }
-    if (response.status === 401) {
-      return "API auth token is missing or invalid.";
-    }
-    return body.detail || body.error || "Backend request failed.";
+    return Shared.getApiErrorMessage(response, body, "Backend request failed.");
   }
 
   function shouldRetryApiError(error) {
-    const message = String(error?.message || "");
-    return !message.startsWith("Please wait") && !message.startsWith("API auth token");
+    return Shared.shouldRetryApiError(error);
   }
 
   /* ── Phase 1: Page context helpers ───────────────────────────── */
@@ -505,7 +324,7 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   function escapeRegExp(value) {
-    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return Shared.escapeRegExp(value);
   }
 
   function buildScanTermMap() {
@@ -1005,6 +824,10 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   async function analyzeMediaPayload(anchor, payload) {
+    if (!hasOpenRouterApiKey()) {
+      throw new Error("OpenRouter API key is required for image analysis. Add your key in Settings.");
+    }
+
     bubble.showLoadingState(anchor, "Analyzing image...");
     try {
       const result = await postJson(MEDIA_ENDPOINT, {
@@ -1027,6 +850,7 @@ if (!window.__brainrotContentScriptLoaded) {
       });
     } catch (error) {
       const errMsg = String(error?.message || "").toLowerCase();
+      const isMissingOpenRouterKey = errMsg.includes("openrouter api key");
       const isConnectionFailure =
         errMsg.includes("failed to fetch") ||
         errMsg.includes("networkerror") ||
@@ -1176,7 +1000,7 @@ if (!window.__brainrotContentScriptLoaded) {
         errMsg.includes("offline") ||
         error instanceof TypeError;
 
-      if (isConnectionFailure) {
+      if (isConnectionFailure || isMissingOpenRouterKey) {
         try {
           const result = translateTextOffline(selectionData.selectedText);
           if (!result.is_brainrot) {
@@ -1211,6 +1035,11 @@ if (!window.__brainrotContentScriptLoaded) {
   }
 
   async function runSelectionRecheck(selectionData) {
+    if (!hasOpenRouterApiKey()) {
+      bubble.showError(selectionData.rect, "OpenRouter API key is required for recheck. Add your key in Settings.");
+      return;
+    }
+
     bubble.showLoadingState(selectionData.rect, "Rechecking highlighted text...");
     const ctx = getPageContext();
     try {
@@ -1337,6 +1166,11 @@ if (!window.__brainrotContentScriptLoaded) {
     if (scaleUp instanceof HTMLButtonElement) {
       scaleUp.disabled = runtimeSettings.brainrotLauncherScale >= MAX_LAUNCHER_SCALE;
     }
+  }
+
+  async function adjustLauncherScale(direction) {
+    const nextScale = runtimeSettings.brainrotLauncherScale + direction * LAUNCHER_SCALE_STEP;
+    await writeSettings({ brainrotLauncherScale: nextScale });
   }
 
   function clampLauncherPosition(top, dock) {

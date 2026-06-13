@@ -35,7 +35,6 @@ class Settings:
     model_dir: Path
     quality_classifier_dir: Path
     reference_dataset_path: Path
-    openrouter_api_key: str | None
     openrouter_text_model: str
     openrouter_text_fast_model: str
     openrouter_text_slow_model: str
@@ -46,7 +45,6 @@ class Settings:
     low_confidence_threshold: float
     max_image_bytes: int
     cache_ttl_hours: int
-    api_auth_token: str | None
     rate_limit_analyze_text: str
     rate_limit_recheck_text: str
     rate_limit_analyze_media: str
@@ -63,7 +61,6 @@ def get_settings() -> Settings:
         model_dir=PROJECT_ROOT / "models" / "brainrot-translator-v1",
         quality_classifier_dir=PROJECT_ROOT / "models" / "brainrot-quality-classifier-v1",
         reference_dataset_path=PROJECT_ROOT / "data" / "processed" / "slang_terms.json",
-        openrouter_api_key=(os.getenv("OPENROUTER_API_KEY") or "").strip() or None,
         openrouter_text_model=(
             os.getenv("OPENROUTER_TEXT_MODEL") or "deepseek/deepseek-v4-flash"
         ).strip(),
@@ -92,7 +89,6 @@ def get_settings() -> Settings:
         ),
         max_image_bytes=int((os.getenv("BRAINROT_MAX_IMAGE_BYTES") or str(5 * 1024 * 1024)).strip()),
         cache_ttl_hours=int((os.getenv("BRAINROT_CACHE_TTL_HOURS") or "168").strip()),
-        api_auth_token=(os.getenv("BRAINROT_API_AUTH_TOKEN") or "").strip() or None,
         rate_limit_analyze_text=(
             os.getenv("BRAINROT_RATE_LIMIT_ANALYZE_TEXT") or "30/minute"
         ).strip(),

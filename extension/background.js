@@ -86,7 +86,7 @@ function sendContextMenuMessage(tab, message) {
       if (chrome.runtime.lastError) {
         // Content script not injected; try injecting first then retry
         chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["pet_shell.css"] }).catch(() => {});
-        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["pet_bubble.js", "content_script.js"] })
+        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["shared.js", "pet_bubble.js", "content_script.js"] })
           .then(() => {
             setTimeout(() => {
               chrome.tabs.sendMessage(tab.id, message);
@@ -132,7 +132,7 @@ chrome.commands.onCommand.addListener((command, tab) => {
       if (chrome.runtime.lastError) {
         // Content script not injected
         chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ["pet_shell.css"] }).catch(() => {});
-        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["pet_bubble.js", "content_script.js"] })
+        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["shared.js", "pet_bubble.js", "content_script.js"] })
           .then(() => {
             setTimeout(() => {
               chrome.tabs.sendMessage(tab.id, { action: "brainrotKeyboardTranslate" });

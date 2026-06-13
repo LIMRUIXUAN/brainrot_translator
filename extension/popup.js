@@ -1,18 +1,8 @@
 (function () {
-  const DEFAULT_API_BASE = "http://127.0.0.1:8000";
+  const Shared = window.BrainrotShared;
+  const DEFAULT_API_BASE = Shared.DEFAULT_API_BASE;
   const MAX_HISTORY_ENTRIES = 200;
-  const DEFAULT_SETTINGS = Object.freeze({
-    brainrotApiBaseUrl: DEFAULT_API_BASE,
-    brainrotApiAuthToken: "",
-    brainrotEnableTextSelection: true,
-    brainrotConfirmTextSelection: true,
-    brainrotEnableHoverDetection: true,
-    brainrotEnableLauncher: true,
-    brainrotEnableClipboardPaste: true,
-    brainrotEnableInlineAnnotation: false,
-    brainrotTextModelSpeed: "fast",
-    brainrotLauncherPosition: null
-  });
+  const DEFAULT_SETTINGS = Shared.BASE_DEFAULT_SETTINGS;
 
   const elements = {};
   const ONBOARDING_STEP_COUNT = 4;
@@ -20,10 +10,6 @@
   let onboardingStepIndex = 0;
 
   let offlineGlossary = [];
-
-  function escapeRegExp(value) {
-    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
 
   function loadOfflineGlossary() {
     return new Promise((resolve) => {
@@ -36,174 +22,11 @@
   }
 
   function translateTextOffline(text) {
-    const cleaned = text.trim();
-    if (!cleaned) {
-      return {
-        is_brainrot: false,
-        brainrot_text: null,
-        equivalent_text: "",
-        formal_explanation: "Empty text.",
-        sentiment_label: "unclear",
-        confidence_score: 0.0,
-        flagged_for_review: false,
-        model_used: "client_offline_glossary"
-      };
-    }
-
-    const lowered = cleaned.toLowerCase();
-    
-    // First, check exact match (case-insensitive)
-    const exactMatches = offlineGlossary.filter(
-      (entry) => String(entry.term || "").toLowerCase().trim() === lowered
-    );
-    if (exactMatches.length > 0) {
-      const match = exactMatches[0];
-      return {
-        is_brainrot: true,
-        brainrot_text: match.term,
-        equivalent_text: match.meaning,
-        formal_explanation: `Matched exact term "${match.term}" offline.`,
-        sentiment_label: "neutral",
-        confidence_score: 0.8,
-        flagged_for_review: false,
-        model_used: "client_offline_glossary"
-      };
-    }
-
-    // Substring lookup matching Python logic
-    const matched = [];
-    const sortedGlossary = [...offlineGlossary].sort((a, b) => {
-      return String(b.term || "").length - String(a.term || "").length;
-    });
-
-    for (const entry of sortedGlossary) {
-      const term = String(entry.term || "").trim();
-      const meaning = String(entry.meaning || "").trim();
-      if (!term || !meaning) continue;
-      const normalizedTerm = term.toLowerCase();
-      if (normalizedTerm.length < 2) continue;
-
-      try {
-        const pattern = new RegExp(`(?<!\\w)${escapeRegExp(normalizedTerm)}(?!\\w)`, "i");
-        if (pattern.test(lowered)) {
-          matched.push({ term, meaning });
-        }
-      } catch (e) {
-        const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "i");
-        if (pattern.test(lowered)) {
-          matched.push({ term, meaning });
-        }
-      }
-    }
-
-    if (matched.length > 0) {
-      let normal = cleaned;
-      if (matched.length === 1 && matched[0].term.toLowerCase().trim() === lowered) {
-        normal = matched[0].meaning;
-      } else {
-        let substituted = cleaned;
-        const termsExplained = [];
-
-        for (const entry of sortedGlossary) {
-          const term = String(entry.term || "").trim();
-          const meaning = String(entry.meaning || "").trim();
-          if (!term || !meaning) continue;
-          const normalizedTerm = term.toLowerCase();
-          if (normalizedTerm.length < 2) continue;
-
-          const pattern = new RegExp(`\\b${escapeRegExp(normalizedTerm)}\\b`, "gi");
-          if (pattern.test(substituted)) {
-            pattern.lastIndex = 0;
-            const cleanMeaning = meaning.trim().replace(/\.+$/, "");
-            substituted = substituted.replace(pattern, `[${cleanMeaning}]`);
-            termsExplained.push(`${term}: ${cleanMeaning}`);
-          }
-        }
-
-        if (termsExplained.length > 0) {
-          substituted = substituted.replace(/\s+/g, " ").trim();
-          normal = substituted;
-        } else {
-          const explanations = matched.slice(0, 4).map(m => `${m.term}: ${m.meaning}`);
-          normal = "Possible meaning: " + explanations.join(" | ");
-        }
-      }
-
-      return {
-        is_brainrot: true,
-        brainrot_text: matched.map(m => m.term).join(", "),
-        equivalent_text: normal,
-        formal_explanation: "Offline translation (glossary lookup).",
-        sentiment_label: "neutral",
-        confidence_score: 0.8,
-        flagged_for_review: false,
-        model_used: "client_offline_glossary"
-      };
-    }
-
-    return {
-      is_brainrot: false,
-      brainrot_text: null,
-      equivalent_text: cleaned,
-      formal_explanation: "No brainrot detected (Offline glossary check).",
-      sentiment_label: "unclear",
-      confidence_score: 0.8,
-      flagged_for_review: false,
-      model_used: "client_offline_glossary"
-    };
+    return Shared.translateTextOffline(text, offlineGlossary);
   }
 
   function normalizeSettings(rawSettings) {
-    const raw = rawSettings || {};
-    const apiBase =
-      typeof raw.brainrotApiBaseUrl === "string" && raw.brainrotApiBaseUrl.trim()
-        ? raw.brainrotApiBaseUrl.trim()
-        : DEFAULT_API_BASE;
-
-    return {
-      brainrotApiBaseUrl: apiBase.replace(/\/+$/, ""),
-      brainrotApiAuthToken:
-        typeof raw.brainrotApiAuthToken === "string"
-          ? raw.brainrotApiAuthToken.trim()
-          : DEFAULT_SETTINGS.brainrotApiAuthToken,
-      brainrotEnableTextSelection:
-        typeof raw.brainrotEnableTextSelection === "boolean"
-          ? raw.brainrotEnableTextSelection
-          : DEFAULT_SETTINGS.brainrotEnableTextSelection,
-      brainrotConfirmTextSelection:
-        typeof raw.brainrotConfirmTextSelection === "boolean"
-          ? raw.brainrotConfirmTextSelection
-          : DEFAULT_SETTINGS.brainrotConfirmTextSelection,
-      brainrotEnableHoverDetection:
-        typeof raw.brainrotEnableHoverDetection === "boolean"
-          ? raw.brainrotEnableHoverDetection
-          : DEFAULT_SETTINGS.brainrotEnableHoverDetection,
-      brainrotEnableLauncher:
-        typeof raw.brainrotEnableLauncher === "boolean"
-          ? raw.brainrotEnableLauncher
-          : DEFAULT_SETTINGS.brainrotEnableLauncher,
-      brainrotEnableClipboardPaste:
-        typeof raw.brainrotEnableClipboardPaste === "boolean"
-          ? raw.brainrotEnableClipboardPaste
-          : DEFAULT_SETTINGS.brainrotEnableClipboardPaste,
-      brainrotEnableInlineAnnotation:
-        typeof raw.brainrotEnableInlineAnnotation === "boolean"
-          ? raw.brainrotEnableInlineAnnotation
-          : DEFAULT_SETTINGS.brainrotEnableInlineAnnotation,
-      brainrotTextModelSpeed:
-        raw.brainrotTextModelSpeed === "slow"
-          ? "slow"
-          : DEFAULT_SETTINGS.brainrotTextModelSpeed,
-      brainrotLauncherPosition:
-        raw.brainrotLauncherPosition &&
-        Number.isFinite(raw.brainrotLauncherPosition.left) &&
-        Number.isFinite(raw.brainrotLauncherPosition.top)
-          ? {
-              left: Math.round(raw.brainrotLauncherPosition.left),
-              top: Math.round(raw.brainrotLauncherPosition.top)
-            }
-          : DEFAULT_SETTINGS.brainrotLauncherPosition
-    };
+    return Shared.normalizeSettings(rawSettings, { defaults: DEFAULT_SETTINGS });
   }
 
   function setNotice(message, tone) {
@@ -224,25 +47,11 @@
   }
 
   function buildApiHeaders(settings, includeJson = false) {
-    const headers = {};
-    if (includeJson) {
-      headers["Content-Type"] = "application/json";
-    }
-    const token = String(settings?.brainrotApiAuthToken || "").trim();
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    return headers;
+    return Shared.buildApiHeaders(settings, includeJson);
   }
 
   function getApiErrorMessage(response, payload, fallback) {
-    if (response.status === 429) {
-      return "Please wait before trying again. The backend rate limit was reached.";
-    }
-    if (response.status === 401) {
-      return "API auth token is missing or invalid.";
-    }
-    return payload.detail || payload.error || fallback;
+    return Shared.getApiErrorMessage(response, payload, fallback);
   }
 
   function getStoredSettings() {
@@ -383,29 +192,25 @@
     const localModelAvailable = Boolean(payload.local_text_model_available);
     const qualityClassifierLoaded = Boolean(payload.local_quality_classifier_loaded);
     const qualityClassifierAvailable = Boolean(payload.local_quality_classifier_available);
-    let modelStatus = "Glossary";
-    let modelHint = "Text uses the local glossary; image analysis still requires OpenRouter.";
-    let modelTone = "warn";
+    const userKeyPresent = Boolean(payload.user_openrouter_key_present || payload.openrouter_configured);
+    const localModelHint = localModelLoaded
+      ? (qualityClassifierLoaded
+          ? " Local FLAN-T5 plus confidence classifier is available for text."
+          : " Local FLAN-T5 is available for text with heuristic confidence.")
+      : (localModelAvailable
+          ? " Local model folder exists and will load on first local-model request."
+          : "");
+    let modelStatus = userKeyPresent ? "Key added" : "Missing key";
+    let modelHint = userKeyPresent
+      ? `AI recheck, reverse translation, and image analysis can use your OpenRouter key.${localModelHint}`
+      : `Add your OpenRouter API key for AI recheck, reverse translation, and image analysis.${localModelHint || " Local/offline glossary text may still work."}`;
+    let modelTone = userKeyPresent ? "ok" : "warn";
 
-    if (localModelLoaded) {
-      modelStatus = "Local model";
-      modelHint = qualityClassifierLoaded
-        ? "Text uses local FLAN-T5 plus the local confidence classifier."
-        : "Text uses local FLAN-T5 with heuristic confidence.";
-      modelTone = "ok";
-      if (qualityClassifierAvailable && !qualityClassifierLoaded) {
-        modelStatus = "Partial local";
-        modelHint = "FLAN-T5 loaded, but the confidence classifier folder could not load.";
+    if (qualityClassifierAvailable && !qualityClassifierLoaded) {
+      modelHint += " The confidence classifier folder exists but could not load.";
+      if (!userKeyPresent) {
         modelTone = "warn";
       }
-    } else if (localModelAvailable) {
-      modelStatus = "Available";
-      modelHint = "Local model folder found. It will load dynamically on first request.";
-      modelTone = "ok";
-    } else if (payload.openrouter_configured) {
-      modelStatus = "OpenRouter";
-      modelHint = "Text and image analysis can use OpenRouter.";
-      modelTone = "ok";
     }
 
     setHealthCard(
@@ -727,9 +532,13 @@
 
     const direction = elements.translateDirection?.value === "to-brainrot" ? "to-brainrot" : "to-english";
     try {
+      if (direction === "to-brainrot" && !settings.brainrotApiAuthToken) {
+        throw new Error("OpenRouter API key is required for reverse translation. Add your key in Settings.");
+      }
+
       const endpoint = direction === "to-brainrot"
         ? "/api/v1/reverse-translate"
-        : "/api/v1/recheck-highlighted-text";
+        : "/api/v1/analyze-highlighted-text";
       const requestBody = direction === "to-brainrot"
         ? {
             text: inputValue,
@@ -780,6 +589,7 @@
       await renderHistory();
     } catch (error) {
       const errMsg = String(error?.message || "").toLowerCase();
+      const isMissingOpenRouterKey = errMsg.includes("openrouter api key");
       const isConnectionFailure =
         errMsg.includes("failed to fetch") ||
         errMsg.includes("networkerror") ||
@@ -789,7 +599,7 @@
         errMsg.includes("offline") ||
         error instanceof TypeError;
 
-      if (isConnectionFailure && direction === "to-english") {
+      if ((isConnectionFailure || isMissingOpenRouterKey) && direction === "to-english") {
         try {
           const payload = translateTextOffline(inputValue);
           if (!payload.is_brainrot) {
@@ -1187,7 +997,7 @@
     });
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ["pet_bubble.js", "content_script.js"]
+      files: ["shared.js", "pet_bubble.js", "content_script.js"]
     });
     await new Promise((resolve) => window.setTimeout(resolve, 120));
     return tab;
@@ -1292,7 +1102,7 @@
     }
   }
 
-  async function refreshHealth(baseUrl) {
+  async function refreshHealth(baseUrl, settings = readFormSettings()) {
     setNotice("Checking backend health...", null);
 
     const controller = new AbortController();
@@ -1301,6 +1111,7 @@
     try {
       const response = await fetch(`${baseUrl}/health`, {
         method: "GET",
+        headers: buildApiHeaders(settings),
         signal: controller.signal
       });
       const payload = await response.json().catch(() => ({}));

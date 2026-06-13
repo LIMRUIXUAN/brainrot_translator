@@ -161,8 +161,9 @@
         <input id="apiBaseUrl" type="url" inputmode="url" spellcheck="false" placeholder="http://127.0.0.1:8000" />
       </label>
       <label class="field">
-        <span>API Auth Token</span>
-        <input id="apiAuthToken" type="password" spellcheck="false" autocomplete="off" placeholder="Optional bearer token" />
+        <span>OpenRouter API Key</span>
+        <input id="apiAuthToken" type="password" spellcheck="false" autocomplete="off" placeholder="Required for AI features" />
+        <small>Required for AI recheck, reverse translation, and image analysis. Local/offline glossary text may still work without it.</small>
       </label>
       <label class="field compact-field">
         <span>Text Model Speed</span>
@@ -256,7 +257,7 @@
           <small id="backendStatusHint">No health check yet.</small>
         </article>
         <article class="health-card" id="modelStatusCard">
-          <p class="health-label">Text Model</p>
+          <p class="health-label">AI Key / Text Model</p>
           <strong id="modelStatusValue">Unknown</strong>
           <small id="modelStatusHint">No health check yet.</small>
         </article>
@@ -369,6 +370,7 @@
     </div>
   </main>
 
+  <script src="shared.js"></script>
   <script src="popup.js"></script>
 </body>
 

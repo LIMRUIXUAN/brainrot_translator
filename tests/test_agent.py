@@ -62,7 +62,7 @@ class BrainrotAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_text_model_speed_selects_fast_or_slow_model(self) -> None:
         calls = []
 
-        async def fake_openrouter_call(*, payload, timeout_seconds):
+        async def fake_openrouter_call(*, payload, timeout_seconds, openrouter_api_key):
             calls.append((payload["model"], timeout_seconds))
             return {
                 "is_brainrot": True,
@@ -77,8 +77,16 @@ class BrainrotAgentTests(unittest.IsolatedAsyncioTestCase):
             }
 
         with patch.object(self.agent, "_execute_openrouter_call", fake_openrouter_call):
-            fast = await self.agent.analyze_highlighted_text("he has rizz", text_model_speed="fast")
-            slow = await self.agent.analyze_highlighted_text("he has rizz", text_model_speed="slow")
+            fast = await self.agent.analyze_highlighted_text(
+                "he has rizz",
+                text_model_speed="fast",
+                openrouter_api_key="user-key",
+            )
+            slow = await self.agent.analyze_highlighted_text(
+                "he has rizz",
+                text_model_speed="slow",
+                openrouter_api_key="user-key",
+            )
 
         self.assertEqual(fast.model_used, self.agent.settings.openrouter_text_fast_model)
         self.assertEqual(slow.model_used, self.agent.settings.openrouter_text_slow_model)

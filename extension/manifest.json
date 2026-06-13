@@ -46,6 +46,7 @@
         "pet_shell.css"
       ],
       "js": [
+        "shared.js",
         "pet_bubble.js",
         "content_script.js"
       ],
@@ -55,6 +56,7 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "shared.js",
         "slang_terms.json"
       ],
       "matches": [

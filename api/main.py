@@ -6,17 +6,16 @@ import hashlib
 import logging
 import os
 import re
-import secrets
 from functools import lru_cache
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from .agent import BrainrotAgent
+from .agent import BrainrotAgent, OpenRouterAuthError
 from .config import get_settings
 from .database import (
     check_database_connection,
@@ -315,9 +314,14 @@ def translate_text(text: str) -> TranslateResponse:
 async def reverse_translate_text(
     text: str,
     text_model_speed: str | None = None,
+    openrouter_api_key: str | None = None,
 ) -> ReverseTranslateResponse:
     cleaned = text.strip()
-    return await agent.reverse_translate(cleaned, text_model_speed=text_model_speed)
+    return await agent.reverse_translate(
+        cleaned,
+        text_model_speed=text_model_speed,
+        openrouter_api_key=openrouter_api_key,
+    )
 
 
 def _looks_like_brainrot_text(text: str) -> bool:
@@ -370,21 +374,20 @@ def _record_text_frequency(selected_text: str, page_url: str | None) -> None:
     )
 
 
-def require_api_auth(request: Request) -> None:
-    if settings.api_auth_token is None:
-        return
+def get_user_openrouter_api_key(request: Request) -> str | None:
+    value = request.headers.get("X-OpenRouter-API-Key", "")
+    cleaned = value.strip()
+    return cleaned or None
 
-    header = request.headers.get("Authorization", "")
-    scheme, _, token = header.partition(" ")
-    if (
-        scheme.casefold() != "bearer"
-        or not token
-        or not secrets.compare_digest(token, settings.api_auth_token)
-    ):
+
+def require_user_openrouter_api_key(request: Request) -> str:
+    api_key = get_user_openrouter_api_key(request)
+    if api_key is None:
         raise HTTPException(
             status_code=401,
-            detail="Missing or invalid API auth token.",
+            detail="OpenRouter API key is required in extension settings.",
         )
+    return api_key
 
 
 def _safe_non_brainrot_text_analysis(selected_text: str) -> HighlightedTextAnalysisResponse:
@@ -532,16 +535,24 @@ def _stage_low_confidence_text(
 async def _run_openrouter_text_analysis(
     request: HighlightedTextAnalysisRequest,
     lookup_key: str,
+    openrouter_api_key: str,
 ) -> HighlightedTextAnalysisResponse:
-    result = await agent.analyze_highlighted_text(
-        selected_text=request.selected_text,
-        page_url=request.page_url,
-        surrounding_text=request.surrounding_text,
-        page_title=request.page_title,
-        page_domain=request.page_domain,
-        nearest_heading=request.nearest_heading,
-        text_model_speed=request.text_model_speed,
-    )
+    try:
+        result = await agent.analyze_highlighted_text(
+            selected_text=request.selected_text,
+            page_url=request.page_url,
+            surrounding_text=request.surrounding_text,
+            page_title=request.page_title,
+            page_domain=request.page_domain,
+            nearest_heading=request.nearest_heading,
+            text_model_speed=request.text_model_speed,
+            openrouter_api_key=openrouter_api_key,
+        )
+    except OpenRouterAuthError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="OpenRouter API key is missing or invalid.",
+        ) from exc
     final = _stage_low_confidence_text(request, result)
     save_cached_text(lookup_key, final.model_dump())
     return final
@@ -577,7 +588,7 @@ def create_app() -> FastAPI:
     )
 
     @app.get("/health")
-    async def health() -> dict[str, object]:
+    async def health(request: Request) -> dict[str, object]:
         local_text_model_available = settings.model_dir.exists()
         local_text_model_loaded = (
             get_model_components.cache_info().currsize > 0
@@ -597,15 +608,15 @@ def create_app() -> FastAPI:
             "local_text_model_loaded": local_text_model_loaded,
             "local_quality_classifier_available": local_quality_classifier_available,
             "local_quality_classifier_loaded": local_quality_classifier_loaded,
-            "openrouter_configured": bool(settings.openrouter_api_key),
-            "text_recheck_configured": bool(settings.openrouter_api_key),
+            "user_openrouter_key_present": bool(get_user_openrouter_api_key(request)),
+            "openrouter_configured": bool(get_user_openrouter_api_key(request)),
+            "text_recheck_configured": bool(get_user_openrouter_api_key(request)),
             "api_base_url": settings.extension_api_base_url,
         }
 
     @app.post(
         "/translate",
         response_model=TranslateResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     async def translate(request: Request):
         try:
@@ -643,15 +654,23 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/v1/reverse-translate",
         response_model=ReverseTranslateResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     async def reverse_translate(
+        request: Request,
         payload: ReverseTranslateRequest,
     ) -> ReverseTranslateResponse:
-        result = await reverse_translate_text(
-            payload.text,
-            text_model_speed=payload.text_model_speed,
-        )
+        openrouter_api_key = require_user_openrouter_api_key(request)
+        try:
+            result = await reverse_translate_text(
+                payload.text,
+                text_model_speed=payload.text_model_speed,
+                openrouter_api_key=openrouter_api_key,
+            )
+        except OpenRouterAuthError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="OpenRouter API key is missing or invalid.",
+            ) from exc
         logger.info(
             "REVERSE TRANSLATE for %r via %s",
             payload.text[:80],
@@ -666,7 +685,6 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/v1/analyze-highlighted-text",
         response_model=HighlightedTextAnalysisResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     @limiter.limit(settings.rate_limit_analyze_text)
     async def analyze_highlighted_text(
@@ -692,7 +710,8 @@ def create_app() -> FastAPI:
                     "TEXT LOCAL MODEL LOW CONFIDENCE for '%s' → calling OpenRouter",
                     lookup_key,
                 )
-                return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
+                openrouter_api_key = require_user_openrouter_api_key(request)
+                return await _run_openrouter_text_analysis(payload, openrouter_cache_key, openrouter_api_key)
 
             final = _stage_low_confidence_text(payload, local_hit)
             save_cached_text(lookup_key, final.model_dump())
@@ -707,17 +726,18 @@ def create_app() -> FastAPI:
                     "TEXT CACHE HIT LOW CONFIDENCE for '%s' → refreshing with OpenRouter",
                     lookup_key,
                 )
-                return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
+                openrouter_api_key = require_user_openrouter_api_key(request)
+                return await _run_openrouter_text_analysis(payload, openrouter_cache_key, openrouter_api_key)
             return db_hit
 
         # ── Step 4: Cache miss → call DeepSeek via OpenRouter ─────────
         logger.info("TEXT CACHE MISS for '%s' → calling OpenRouter", lookup_key)
-        return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
+        openrouter_api_key = require_user_openrouter_api_key(request)
+        return await _run_openrouter_text_analysis(payload, openrouter_cache_key, openrouter_api_key)
 
     @app.post(
         "/api/v1/recheck-highlighted-text",
         response_model=HighlightedTextAnalysisResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     @limiter.limit(settings.rate_limit_recheck_text)
     async def recheck_highlighted_text(
@@ -728,12 +748,12 @@ def create_app() -> FastAPI:
         openrouter_cache_key = _text_model_speed_cache_key(lookup_key, payload.text_model_speed)
         _record_text_frequency(payload.selected_text, payload.page_url)
         logger.info("TEXT MANUAL RECHECK for '%s' → calling OpenRouter", lookup_key)
-        return await _run_openrouter_text_analysis(payload, openrouter_cache_key)
+        openrouter_api_key = require_user_openrouter_api_key(request)
+        return await _run_openrouter_text_analysis(payload, openrouter_cache_key, openrouter_api_key)
 
     @app.get(
         "/api/v1/dashboard/word-frequency",
         response_model=DashboardWordFrequencyResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     @limiter.limit(settings.rate_limit_dashboard)
     async def dashboard_word_frequency(
@@ -746,7 +766,6 @@ def create_app() -> FastAPI:
     @app.get(
         "/api/v1/dashboard/stats",
         response_model=DashboardStatsResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     @limiter.limit(settings.rate_limit_dashboard)
     async def dashboard_stats(request: Request) -> DashboardStatsResponse:
@@ -760,7 +779,6 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/v1/analyze-screenshot-media",
         response_model=ImageAnalysisResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     @limiter.limit(settings.rate_limit_analyze_media)
     async def analyze_screenshot_media(
@@ -798,16 +816,24 @@ def create_app() -> FastAPI:
             return db_hit
 
         # ── Step 3: Cache miss → call Gemini via OpenRouter ───────────
+        openrouter_api_key = require_user_openrouter_api_key(request)
         logger.info("IMAGE CACHE MISS for hash %s → calling OpenRouter", image_hash[:16])
-        result = await agent.analyze_screenshot_media(
-            image_base64=payload.image_base64,
-            media_type=payload.media_type,
-            source_url=payload.source_url,
-            frame0_base64=payload.frame0_base64,
-            frame0_media_type=payload.frame0_media_type,
-            page_title=payload.page_title,
-            page_domain=payload.page_domain,
-        )
+        try:
+            result = await agent.analyze_screenshot_media(
+                image_base64=payload.image_base64,
+                media_type=payload.media_type,
+                source_url=payload.source_url,
+                frame0_base64=payload.frame0_base64,
+                frame0_media_type=payload.frame0_media_type,
+                page_title=payload.page_title,
+                page_domain=payload.page_domain,
+                openrouter_api_key=openrouter_api_key,
+            )
+        except OpenRouterAuthError as exc:
+            raise HTTPException(
+                status_code=401,
+                detail="OpenRouter API key is missing or invalid.",
+            ) from exc
 
         flagged = result.flagged_for_review or result.confidence_score < settings.low_confidence_threshold
         if flagged:
@@ -828,7 +854,6 @@ def create_app() -> FastAPI:
     @app.post(
         "/api/v1/analyze-image",
         response_model=ImageAnalysisResponse,
-        dependencies=[Depends(require_api_auth)],
     )
     async def analyze_image_alias(
         request: Request,

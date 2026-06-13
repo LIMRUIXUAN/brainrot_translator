@@ -36,6 +36,10 @@ REFERENCE_FOCUS_TERMS = (
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
+class OpenRouterAuthError(RuntimeError):
+    pass
+
+
 def _trim_text(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -118,12 +122,14 @@ class BrainrotAgent:
         *,
         payload: dict[str, Any],
         timeout_seconds: float,
+        openrouter_api_key: Optional[str],
     ) -> dict[str, Any]:
-        if not self.settings.openrouter_api_key:
-            raise RuntimeError("OPENROUTER_API_KEY is not configured.")
+        api_key = (openrouter_api_key or "").strip()
+        if not api_key:
+            raise RuntimeError("OpenRouter API key is required in extension settings.")
 
         headers = {
-            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": self.settings.openrouter_http_referer,
             "X-OpenRouter-Title": self.settings.openrouter_app_title,
@@ -131,6 +137,8 @@ class BrainrotAgent:
         timeout = httpx.Timeout(timeout_seconds, connect=min(5.0, timeout_seconds))
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
+            if response.status_code in {401, 403}:
+                raise OpenRouterAuthError("OpenRouter API key is missing or invalid.")
             response.raise_for_status()
 
         body = response.json()
@@ -385,6 +393,7 @@ class BrainrotAgent:
         self,
         text: str,
         text_model_speed: str | None = None,
+        openrouter_api_key: str | None = None,
     ) -> ReverseTranslateResponse:
         cleaned = text.strip()
         model, timeout_seconds = self._resolve_text_model(text_model_speed)
@@ -409,13 +418,19 @@ class BrainrotAgent:
         }
 
         try:
-            parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=timeout_seconds)
+            parsed = await self._execute_openrouter_call(
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+                openrouter_api_key=openrouter_api_key,
+            )
             result = ReverseTranslateResponse.model_validate(parsed)
             return ReverseTranslateResponse(
                 reverse_text=_trim_text(result.reverse_text) or cleaned,
                 confidence_score=max(0.0, min(1.0, float(result.confidence_score))),
                 model_used=result.model_used or model,
             )
+        except OpenRouterAuthError:
+            raise
         except Exception:
             logger.exception("Reverse translation model failed for text=%r", cleaned[:120])
             return self._heuristic_reverse_fallback(cleaned)
@@ -429,6 +444,7 @@ class BrainrotAgent:
         page_domain: Optional[str] = None,
         nearest_heading: Optional[str] = None,
         text_model_speed: str | None = None,
+        openrouter_api_key: str | None = None,
     ) -> HighlightedTextAnalysisResponse:
         model, timeout_seconds = self._resolve_text_model(text_model_speed)
         payload = {
@@ -459,13 +475,19 @@ class BrainrotAgent:
         }
 
         try:
-            parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=timeout_seconds)
+            parsed = await self._execute_openrouter_call(
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+                openrouter_api_key=openrouter_api_key,
+            )
             result = HighlightedTextAnalysisResponse.model_validate(parsed)
             return self._normalize_text_result(
                 result,
                 selected_text=selected_text,
                 model_used=model,
             )
+        except OpenRouterAuthError:
+            raise
         except httpx.TimeoutException:
             return self._heuristic_text_fallback(selected_text)
         except Exception:
@@ -483,6 +505,7 @@ class BrainrotAgent:
         page_title: Optional[str] = None,
         page_domain: Optional[str] = None,
         timeout_seconds: float = 12.0,
+        openrouter_api_key: str | None = None,
     ) -> ImageAnalysisResponse:
         data_url = (
             image_base64.strip()
@@ -523,7 +546,11 @@ class BrainrotAgent:
             "temperature": 0.1,
         }
 
-        parsed = await self._execute_openrouter_call(payload=payload, timeout_seconds=timeout_seconds)
+        parsed = await self._execute_openrouter_call(
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+            openrouter_api_key=openrouter_api_key,
+        )
         result = ImageAnalysisResponse.model_validate(parsed)
         return self._normalize_image_result(
             result,
@@ -540,6 +567,7 @@ class BrainrotAgent:
         frame0_media_type: Optional[str] = None,
         page_title: Optional[str] = None,
         page_domain: Optional[str] = None,
+        openrouter_api_key: str | None = None,
     ) -> ImageAnalysisResponse:
         try:
             return await self._call_image_model(
@@ -550,7 +578,10 @@ class BrainrotAgent:
                 using_frame=False,
                 page_title=page_title,
                 page_domain=page_domain,
+                openrouter_api_key=openrouter_api_key,
             )
+        except OpenRouterAuthError:
+            raise
         except httpx.TimeoutException:
             return ImageAnalysisResponse.safe_fallback(
                 confidence_score=0.0,
@@ -572,7 +603,10 @@ class BrainrotAgent:
                         using_frame=True,
                         page_title=page_title,
                         page_domain=page_domain,
+                        openrouter_api_key=openrouter_api_key,
                     )
+                except OpenRouterAuthError:
+                    raise
                 except httpx.TimeoutException:
                     return ImageAnalysisResponse.safe_fallback(
                         confidence_score=0.0,

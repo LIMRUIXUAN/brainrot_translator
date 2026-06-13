@@ -1,5 +1,5 @@
 # Brainrot Translator - Mini Markdown Report
-🟥 **WIF3009 • GROUP 5** 
+🟥 **WIF3009 • OCC1 GROUP 5** 
 
 ## 👥 Team Members - WIF3009 Group 5 
 Lim Rui Xuan	24004520

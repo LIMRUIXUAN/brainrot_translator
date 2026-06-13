@@ -11,7 +11,7 @@ Use these steps when setting up the project on a new machine or after cloning a 
 - Python 3.11 or newer.
 - Google Chrome or another Chromium browser that supports Manifest V3 extensions.
 - PowerShell on Windows for the commands below.
-- Optional: an OpenRouter API key for DeepSeek text recheck and image/GIF analysis.
+- Optional: each extension user needs their own OpenRouter API key for DeepSeek text recheck, reverse translation, and image/GIF analysis.
 - Optional: a database URL for cache, review staging, and the Brainrot Frequency dashboard.
 
 ### 1. Create and activate the virtual environment
@@ -49,14 +49,15 @@ BRAINROT_API_BASE_URL=http://127.0.0.1:8000
 BRAINROT_LOW_CONFIDENCE_THRESHOLD=0.7
 ```
 
-Recommended setup with DeepSeek recheck through OpenRouter:
+Recommended setup with OpenRouter model choices:
 
 ```env
-OPENROUTER_API_KEY=your_openrouter_key_here
 OPENROUTER_TEXT_MODEL=deepseek/deepseek-v4-flash
 BRAINROT_API_BASE_URL=http://127.0.0.1:8000
 BRAINROT_LOW_CONFIDENCE_THRESHOLD=0.7
 ```
+
+Do not put a shared OpenRouter API key in `.env`. Enter the user's OpenRouter API key in the extension side panel under `Settings / Status -> OpenRouter API Key`.
 
 Add a database if you want cache, low-confidence review staging, and dashboard frequency counts:
 
@@ -89,13 +90,14 @@ Expected result includes:
 ```json
 {
   "status": "ok",
-  "openrouter_configured": true,
-  "text_recheck_configured": true,
+  "user_openrouter_key_present": false,
+  "openrouter_configured": false,
+  "text_recheck_configured": false,
   "api_base_url": "http://127.0.0.1:8000"
 }
 ```
 
-`openrouter_configured` is `false` when no `OPENROUTER_API_KEY` is present. Local text translation can still work without it, but forced DeepSeek recheck and image/GIF analysis need OpenRouter.
+`user_openrouter_key_present` is `false` when the request does not include the user's OpenRouter API key. Local text translation can still work without it, but forced recheck, reverse translation, remote text fallback, and image/GIF analysis require the user key from extension settings.
 
 ### 6. Load the Chrome extension
 
@@ -106,8 +108,9 @@ Expected result includes:
 5. Open a normal `http` or `https` webpage.
 6. Click the Brainrot Translator extension icon.
 7. In the side panel, set API Base URL to `http://127.0.0.1:8000`.
-8. Click `Check Health`.
-9. Click `Check Active Page`.
+8. Enter your OpenRouter API key if you want AI recheck, reverse translation, or image analysis.
+9. Click `Check Health`.
+10. Click `Check Active Page`.
 
 If you reload the extension during development, refresh the webpage tab too. Old content scripts can otherwise show `Extension context invalidated` errors.
 
@@ -172,7 +175,7 @@ python -m unittest discover -s tests
 
 - `No module named uvicorn`: activate `.venv`, then run `python -m pip install -r requirements.txt`.
 - `Database Unavailable`: add `DATABASE_URL=sqlite:///./brainrot_translator.db` to `.env`, then restart the backend.
-- `Recheck Unavailable` or fallback response: confirm `/health` shows `openrouter_configured: true`, then retry. OpenRouter timeouts or invalid keys will cause fallback output.
+- `OpenRouter API key is missing or invalid`: enter a valid user OpenRouter API key in the extension settings, then retry. Local/offline glossary text may still work without it.
 - `Extension context invalidated`: reload the extension and refresh the webpage tab.
 - Side panel cannot connect to page: use a normal `http` or `https` page. Chrome internal pages such as `chrome://extensions` cannot run the content script.
 
@@ -292,13 +295,13 @@ brainrot_translator/
 - Build the local FLAN-T5 training CSV with `python scripts/prepare_training_dataset.py`.
 - Train in Google Colab with `notebooks/train_flan_t5_colab.ipynb`, then place the downloaded model folder at `models/brainrot-translator-v1`.
 - `/translate` uses `models/brainrot-translator-v1` when present and falls back to the local glossary mock when the model folder is missing.
-- `/api/v1/analyze-highlighted-text` also prefers the local model when installed; OpenRouter is only a fallback for text cache misses without a local model.
+- `/api/v1/analyze-highlighted-text` also prefers the local model when installed; OpenRouter is only a fallback for text cache misses without a local model, and that fallback requires the user's `X-OpenRouter-API-Key` request header.
 - Build the local good/bad translation classifier dataset with `python scripts/prepare_quality_classifier_dataset.py`.
 - Train the local quality classifier with `python scripts/train_quality_classifier.py`, or use `notebooks/train_quality_classifier_colab.ipynb` on Colab GPU, then place the saved folder at `models/brainrot-quality-classifier-v1`.
 - When `models/brainrot-quality-classifier-v1` exists, highlighted-text confidence comes from that local classifier. Without it, the backend uses a deterministic heuristic confidence score.
 - `slang_terms.json` is not updated automatically by app usage; database cache/review rows are separate from the fixed vocabulary file.
-- `.env` stays local; copy from `.env.example` and fill in real credentials when needed.
-- `OPENROUTER_API_KEY` is required only for text fallback without a local model and for image/GIF analysis, not for the local text model path.
+- `.env` stays local; copy from `.env.example` and configure model names, database, thresholds, and API base URL as needed.
+- OpenRouter API keys are user-owned and entered in the extension side panel. They are sent to the backend as `X-OpenRouter-API-Key` only for requests that may need OpenRouter.
 - `DATABASE_URL` is optional for cache/review persistence.
 - The extension defaults to `http://127.0.0.1:8000` and can be overridden with `BRAINROT_API_BASE_URL`.
 - The extension action now opens a persistent side panel for testing; the floating pet still replies on the webpage itself while the side panel stays open for settings and `/health`.

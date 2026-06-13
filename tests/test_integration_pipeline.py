@@ -11,10 +11,12 @@ import api.main as api_main
 from api.schemas import HighlightedTextAnalysisResponse, ImageAnalysisResponse
 
 
+USER_OPENROUTER_HEADERS = {"X-OpenRouter-API-Key": "user-key"}
+
+
 def _pipeline_settings():
     return replace(
         api_main.settings,
-        api_auth_token=None,
         low_confidence_threshold=0.7,
         rate_limit_analyze_text="1000/minute",
         rate_limit_analyze_media="1000/minute",
@@ -107,6 +109,7 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             first = await self.client.post(
                 "/api/v1/analyze-highlighted-text",
                 json={"selected_text": "new slang"},
+                headers=USER_OPENROUTER_HEADERS,
             )
             second = await self.client.post(
                 "/api/v1/analyze-highlighted-text",
@@ -151,6 +154,7 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             response = await self.client.post(
                 "/api/v1/analyze-highlighted-text",
                 json={"selected_text": "he has rizz"},
+                headers=USER_OPENROUTER_HEADERS,
             )
 
         self.assertEqual(response.status_code, 200)
@@ -185,7 +189,7 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["model_used"], "cached:nvidia/nemotron-3.5-content-safety:free")
+        self.assertEqual(response.json()["model_used"], "cached:google/nvidia/nemotron-3.5-content-safety:free")
         openrouter.assert_not_awaited()
         save_mock.assert_not_called()
 
