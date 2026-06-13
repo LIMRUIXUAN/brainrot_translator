@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import api.main as api_main
 
@@ -140,6 +141,7 @@ class ApiTests(unittest.TestCase):
         agent_mock.assert_awaited_once_with(
             "He is very charming",
             text_model_speed="fast",
+            text_model_tier="free",
             openrouter_api_key="user-key",
         )
 
@@ -167,6 +169,7 @@ class ApiTests(unittest.TestCase):
         agent_mock.assert_awaited_once_with(
             "Bro, have to do for assignment right now",
             text_model_speed="fast",
+            text_model_tier="free",
             openrouter_api_key="user-key",
         )
         local_reverse_mock.assert_not_called()
@@ -188,9 +191,7 @@ class ApiTests(unittest.TestCase):
              patch("api.main._try_db_text_lookup", return_value=None), \
              patch("api.main._try_local_model_text_analysis", return_value=None), \
              patch("api.main.settings", replace(api_main.settings, low_confidence_threshold=0.7)), \
-             patch("api.main.save_cached_text", return_value=True), \
-             patch("api.main.agent.analyze_highlighted_text", AsyncMock(return_value=mocked_result)), \
-             patch("api.main.flag_text_for_review") as flag_mock:
+             patch("api.main.agent.analyze_highlighted_text", AsyncMock(return_value=mocked_result)):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
                     json={
@@ -203,7 +204,6 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["flagged_for_review"])
-        flag_mock.assert_called_once()
 
     def test_highlighted_text_route_prefers_local_model_when_available(self) -> None:
         class FakeTokenizer:
@@ -223,7 +223,6 @@ class ApiTests(unittest.TestCase):
              patch("api.main._try_db_text_lookup", return_value=None), \
              patch("api.main.get_model_components", return_value=(FakeTokenizer(), FakeModel())), \
              patch("api.main.get_quality_classifier_components", return_value=None), \
-             patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", agent_mock):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
@@ -267,7 +266,6 @@ class ApiTests(unittest.TestCase):
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main._try_local_model_text_analysis", return_value=local_result), \
              patch("api.main.settings", replace(api_main.settings, low_confidence_threshold=0.7)), \
-             patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", agent_mock):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
@@ -298,7 +296,6 @@ class ApiTests(unittest.TestCase):
         with patch("api.main._try_slang_json_lookup") as slang_mock, \
              patch("api.main._try_local_model_text_analysis") as local_mock, \
              patch("api.main._try_db_text_lookup") as db_mock, \
-             patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", agent_mock):
                 response = self.client.post(
                     "/api/v1/recheck-highlighted-text",
@@ -313,11 +310,12 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["model_used"], "deepseek/deepseek-v4-flash")
         agent_mock.assert_awaited_once()
         self.assertEqual(agent_mock.await_args.kwargs["text_model_speed"], "fast")
+        self.assertEqual(agent_mock.await_args.kwargs["text_model_tier"], "free")
         slang_mock.assert_not_called()
         local_mock.assert_not_called()
         db_mock.assert_not_called()
 
-    def test_manual_recheck_endpoint_passes_slow_text_model_speed(self) -> None:
+    def test_manual_recheck_endpoint_passes_premium_text_model_tier(self) -> None:
         openrouter_result = HighlightedTextAnalysisResponse(
             is_brainrot=True,
             brainrot_text="he has rizz",
@@ -327,24 +325,23 @@ class ApiTests(unittest.TestCase):
             sentiment_rationale="Complimentary.",
             confidence_score=0.9,
             flagged_for_review=False,
-            model_used="nvidia/nemotron-3-super-120b-a12b:free",
+            model_used="deepseek/deepseek-v4-flash",
         )
         agent_mock = AsyncMock(return_value=openrouter_result)
 
-        with patch("api.main.save_cached_text", return_value=True), \
-             patch("api.main.agent.analyze_highlighted_text", agent_mock):
+        with             patch("api.main.agent.analyze_highlighted_text", agent_mock):
                 response = self.client.post(
                     "/api/v1/recheck-highlighted-text",
                     json={
                         "selected_text": "he has rizz",
-                        "text_model_speed": "slow",
+                        "text_model_tier": "premium",
                     },
                     headers=USER_OPENROUTER_HEADERS,
                 )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["model_used"], "nvidia/nemotron-3-super-120b-a12b:free")
-        self.assertEqual(agent_mock.await_args.kwargs["text_model_speed"], "slow")
+        self.assertEqual(response.json()["model_used"], "deepseek/deepseek-v4-flash")
+        self.assertEqual(agent_mock.await_args.kwargs["text_model_tier"], "premium")
 
     def test_highlighted_text_route_uses_quality_classifier_confidence_when_available(self) -> None:
         import torch
@@ -377,8 +374,7 @@ class ApiTests(unittest.TestCase):
 
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main.get_model_components", return_value=(FakeTranslationTokenizer(), FakeTranslationModel())), \
-             patch("api.main.get_quality_classifier_components", return_value=(quality_tokenizer, FakeQualityModel())), \
-             patch("api.main.save_cached_text", return_value=True):
+             patch("api.main.get_quality_classifier_components", return_value=(quality_tokenizer, FakeQualityModel())):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
                     json={"selected_text": "he has rizz"},
@@ -426,7 +422,6 @@ class ApiTests(unittest.TestCase):
 
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main._try_db_text_lookup", return_value=None), \
-             patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", agent_mock):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
@@ -457,8 +452,7 @@ class ApiTests(unittest.TestCase):
 
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main.get_model_components", return_value=(FakeTokenizer(), FakeModel())), \
-             patch("api.main.get_quality_classifier_components", return_value=None), \
-             patch("api.main.save_cached_text", return_value=True):
+             patch("api.main.get_quality_classifier_components", return_value=None):
                 response = self.client.post(
                     "/api/v1/analyze-highlighted-text",
                     json={
@@ -515,8 +509,7 @@ class ApiTests(unittest.TestCase):
         with patch("api.main._try_db_image_lookup", return_value=None), \
              patch("api.main.settings", replace(api_main.settings, low_confidence_threshold=0.7)), \
              patch("api.main.save_cached_image", return_value=True), \
-             patch("api.main.agent.analyze_screenshot_media", AsyncMock(return_value=mocked_result)), \
-             patch("api.main.flag_image_for_review") as flag_mock:
+             patch("api.main.agent.analyze_screenshot_media", AsyncMock(return_value=mocked_result)):
                 response = self.client.post(
                     "/api/v1/analyze-screenshot-media",
                     json={
@@ -529,7 +522,6 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["flagged_for_review"])
-        flag_mock.assert_called_once()
 
     def test_image_route_does_not_update_text_frequency(self) -> None:
         mocked_result = ImageAnalysisResponse(
@@ -545,8 +537,7 @@ class ApiTests(unittest.TestCase):
 
         with patch("api.main._try_db_image_lookup", return_value=None), \
              patch("api.main.save_cached_image", return_value=True), \
-             patch("api.main.agent.analyze_screenshot_media", AsyncMock(return_value=mocked_result)), \
-             patch("api.main.increment_word_frequencies") as frequency_mock:
+             patch("api.main.agent.analyze_screenshot_media", AsyncMock(return_value=mocked_result)):
                 response = self.client.post(
                     "/api/v1/analyze-screenshot-media",
                     json={
@@ -558,7 +549,6 @@ class ApiTests(unittest.TestCase):
                 )
 
         self.assertEqual(response.status_code, 200)
-        frequency_mock.assert_not_called()
 
     def test_analyze_image_alias_uses_same_response_shape(self) -> None:
         mocked_result = ImageAnalysisResponse(
@@ -601,6 +591,61 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["items"][0]["term"], "rizz")
         list_mock.assert_called_once_with(100)
+
+    def test_telemetry_public_leaderboard_and_admin_moderation(self) -> None:
+        engine = create_engine(
+            "sqlite://",
+            future=True,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        database.Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+
+        with patch("api.database.get_session_factory", return_value=session_factory), \
+             patch(
+                 "api.main.settings",
+                 replace(
+                     api_main.settings,
+                     unsafe_slang_keywords=("porn",),
+                     rate_limit_dashboard="1000/minute",
+                 ),
+             ):
+            client = TestClient(api_main.create_app())
+            ingest = client.post(
+                "/api/v1/telemetry/slang-detections",
+                json={
+                    "items": [
+                        {"term": "rizz", "count": 3},
+                        {"term": "porn slang", "count": 7},
+                    ],
+                    "extension_version": "1.0.0",
+                },
+            )
+            public_before = client.get("/api/v1/public/top-slang?period=month&limit=10")
+
+            with patch("api.main.require_google_admin", AsyncMock(return_value="admin@example.com")):
+                admin_list = client.get(
+                    "/api/v1/admin/slang",
+                    headers={"Authorization": "Bearer google-id-token"},
+                )
+                update = client.patch(
+                    "/api/v1/admin/slang/porn%20slang",
+                    headers={"Authorization": "Bearer google-id-token"},
+                    json={"status": "visible", "reason": "allowed for test"},
+                )
+
+            public_after = database.list_top_slang(period="month", limit=10)
+
+        self.assertEqual(ingest.status_code, 200)
+        self.assertTrue(ingest.json()["stored"])
+        self.assertEqual([item["term"] for item in public_before.json()["items"]], ["rizz"])
+        self.assertEqual(admin_list.status_code, 200)
+        admin_terms = {item["term"]: item for item in admin_list.json()["items"]}
+        self.assertEqual(admin_terms["porn slang"]["status"], "hidden")
+        self.assertEqual(update.status_code, 200)
+        self.assertEqual(update.json()["status"], "visible")
+        self.assertEqual(public_after["items"][0]["term"], "porn slang")
 
     def test_text_cache_save_upserts_existing_lookup_key(self) -> None:
         engine = create_engine("sqlite:///:memory:", future=True)
@@ -697,3 +742,4 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(items[0]["count"], 2)
         self.assertEqual(items[1]["term"], "skill issue")
         self.assertEqual(items[1]["count"], 1)
+

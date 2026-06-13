@@ -8,6 +8,7 @@ import os
 import re
 from functools import lru_cache
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,28 +20,35 @@ from .agent import BrainrotAgent, OpenRouterAuthError
 from .config import get_settings
 from .database import (
     check_database_connection,
-    flag_image_for_review,
-    flag_text_for_review,
     get_dashboard_stats,
-    increment_word_frequencies,
+    list_admin_slang,
     list_word_frequencies,
+    list_top_slang,
     load_slang_terms_index,
     lookup_cached_image,
     lookup_cached_text,
+    normalize_slang_term,
+    record_slang_detections,
     save_cached_image,
-    save_cached_text,
+    update_slang_moderation,
 )
 from .local_translator import MockLocalTranslator
 from .schemas import (
+    AdminSlangListResponse,
+    AdminSlangModerationUpdate,
+    AdminSlangItem,
     DashboardStatsResponse,
     DashboardWordFrequencyResponse,
     HighlightedTextAnalysisRequest,
     HighlightedTextAnalysisResponse,
     ImageAnalysisRequest,
     ImageAnalysisResponse,
+    PublicTopSlangResponse,
     ReverseTranslateRequest,
     ReverseTranslateResponse,
     ScreenshotMediaRequest,
+    SlangDetectionsTelemetryRequest,
+    SlangDetectionsTelemetryResponse,
     TranslateResponse,
 )
 
@@ -50,6 +58,42 @@ settings = get_settings()
 agent = BrainrotAgent(settings=settings)
 local_translator = MockLocalTranslator(settings.reference_dataset_path)
 limiter = Limiter(key_func=get_remote_address)
+
+SENSITIVE_HEADER_NAMES = {
+    "authorization",
+    "x-openrouter-api-key",
+}
+
+
+def redact_sensitive_value(value: object) -> object:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= 8:
+        return "[REDACTED]"
+    return f"{text[:4]}...[REDACTED]...{text[-4:]}"
+
+
+class SensitiveValueRedactionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, dict):
+            record.args = {
+                key: redact_sensitive_value(value)
+                if str(key).casefold() in SENSITIVE_HEADER_NAMES
+                else value
+                for key, value in record.args.items()
+            }
+        elif isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_sensitive_value(value)
+                if isinstance(value, str) and ("sk-or-" in value or "Bearer " in value)
+                else value
+                for value in record.args
+            )
+        return True
+
+
+logging.getLogger().addFilter(SensitiveValueRedactionFilter())
 
 SLANG_TEXT_MARKERS = (
     "aura",
@@ -314,12 +358,14 @@ def translate_text(text: str) -> TranslateResponse:
 async def reverse_translate_text(
     text: str,
     text_model_speed: str | None = None,
+    text_model_tier: str | None = None,
     openrouter_api_key: str | None = None,
 ) -> ReverseTranslateResponse:
     cleaned = text.strip()
     return await agent.reverse_translate(
         cleaned,
         text_model_speed=text_model_speed,
+        text_model_tier=text_model_tier,
         openrouter_api_key=openrouter_api_key,
     )
 
@@ -367,13 +413,6 @@ def _extract_brainrot_frequency_terms(text: str) -> dict[str, str]:
     return matches
 
 
-def _record_text_frequency(selected_text: str, page_url: str | None) -> None:
-    increment_word_frequencies(
-        _extract_brainrot_frequency_terms(selected_text),
-        page_url=page_url,
-    )
-
-
 def get_user_openrouter_api_key(request: Request) -> str | None:
     value = request.headers.get("X-OpenRouter-API-Key", "")
     cleaned = value.strip()
@@ -388,6 +427,40 @@ def require_user_openrouter_api_key(request: Request) -> str:
             detail="OpenRouter API key is required in extension settings.",
         )
     return api_key
+
+
+async def require_google_admin(request: Request) -> str:
+    auth_header = request.headers.get("Authorization", "").strip()
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Google admin login is required.")
+
+    if not settings.google_admin_client_id or not settings.admin_google_emails:
+        raise HTTPException(status_code=403, detail="Admin Google login is not configured.")
+
+    token = auth_header.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Google admin login is required.")
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": token},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=401, detail="Unable to verify Google login.") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="Google admin login is invalid.")
+
+    payload = response.json()
+    email = str(payload.get("email", "")).strip().casefold()
+    aud = str(payload.get("aud", "")).strip()
+    email_verified = str(payload.get("email_verified", "")).strip().casefold() in {"true", "1"}
+    allowed_emails = {item.strip().casefold() for item in settings.admin_google_emails if item.strip()}
+    if aud != settings.google_admin_client_id or not email_verified or email not in allowed_emails:
+        raise HTTPException(status_code=403, detail="Google account is not allowed for admin moderation.")
+    return email
 
 
 def _safe_non_brainrot_text_analysis(selected_text: str) -> HighlightedTextAnalysisResponse:
@@ -467,9 +540,9 @@ def _normalise_text_key(raw: str) -> str:
     return cleaned.strip()
 
 
-def _text_model_speed_cache_key(lookup_key: str, text_model_speed: str) -> str:
-    speed = text_model_speed if text_model_speed in {"fast", "slow"} else "fast"
-    return f"{lookup_key}::text_model_speed={speed}"
+def _text_model_cache_key(lookup_key: str, text_model_tier: str) -> str:
+    tier = text_model_tier if text_model_tier in {"free", "premium"} else "free"
+    return f"{lookup_key}::text_model_tier={tier}"
 
 
 def _hash_image_payload(image_base64: str) -> str:
@@ -521,14 +594,8 @@ def _stage_low_confidence_text(
     request: HighlightedTextAnalysisRequest,
     result: HighlightedTextAnalysisResponse,
 ) -> HighlightedTextAnalysisResponse:
+    del request
     flagged = result.flagged_for_review or _is_low_confidence_result(result)
-    if flagged:
-        flag_text_for_review(
-            source_text=request.selected_text,
-            page_url=request.page_url,
-            agent_equivalent_text=result.equivalent_text,
-            confidence=result.confidence_score,
-        )
     return result.model_copy(update={"flagged_for_review": flagged})
 
 
@@ -546,6 +613,7 @@ async def _run_openrouter_text_analysis(
             page_domain=request.page_domain,
             nearest_heading=request.nearest_heading,
             text_model_speed=request.text_model_speed,
+            text_model_tier=request.text_model_tier,
             openrouter_api_key=openrouter_api_key,
         )
     except OpenRouterAuthError as exc:
@@ -554,7 +622,7 @@ async def _run_openrouter_text_analysis(
             detail="OpenRouter API key is missing or invalid.",
         ) from exc
     final = _stage_low_confidence_text(request, result)
-    save_cached_text(lookup_key, final.model_dump())
+    del lookup_key
     return final
 
 
@@ -579,6 +647,16 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Brainrot Translator API")
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    @app.middleware("http")
+    async def reject_openrouter_key_on_public_routes(request: Request, call_next):
+        if request.url.path.startswith("/api/v1/telemetry/") and get_user_openrouter_api_key(request):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Do not send OpenRouter API keys to telemetry routes."},
+            )
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -612,6 +690,20 @@ def create_app() -> FastAPI:
             "openrouter_configured": bool(get_user_openrouter_api_key(request)),
             "text_recheck_configured": bool(get_user_openrouter_api_key(request)),
             "api_base_url": settings.extension_api_base_url,
+        }
+
+    @app.get("/api/v1/public/model-config")
+    async def public_model_config() -> dict[str, object]:
+        return {
+            "text": {
+                "free": settings.openrouter_text_free_model,
+                "premium": settings.openrouter_text_premium_model,
+            },
+            "image": {
+                "free": settings.openrouter_image_free_model,
+                "premium": settings.openrouter_image_premium_model,
+                "fallbacks": list(settings.openrouter_vision_fallback_models),
+            },
         }
 
     @app.post(
@@ -664,6 +756,7 @@ def create_app() -> FastAPI:
             result = await reverse_translate_text(
                 payload.text,
                 text_model_speed=payload.text_model_speed,
+                text_model_tier=payload.text_model_tier,
                 openrouter_api_key=openrouter_api_key,
             )
         except OpenRouterAuthError as exc:
@@ -692,8 +785,7 @@ def create_app() -> FastAPI:
         payload: HighlightedTextAnalysisRequest,
     ) -> HighlightedTextAnalysisResponse:
         lookup_key = _normalise_text_key(payload.selected_text)
-        openrouter_cache_key = _text_model_speed_cache_key(lookup_key, payload.text_model_speed)
-        _record_text_frequency(payload.selected_text, payload.page_url)
+        openrouter_cache_key = _text_model_cache_key(lookup_key, payload.text_model_tier)
 
         # ── Step 1: Check local slang_terms.json ──────────────────────
         json_hit = _try_slang_json_lookup(lookup_key)
@@ -714,7 +806,6 @@ def create_app() -> FastAPI:
                 return await _run_openrouter_text_analysis(payload, openrouter_cache_key, openrouter_api_key)
 
             final = _stage_low_confidence_text(payload, local_hit)
-            save_cached_text(lookup_key, final.model_dump())
             return final
 
         # ── Step 3: Check PostgreSQL cache table if no local model exists
@@ -745,11 +836,76 @@ def create_app() -> FastAPI:
         payload: HighlightedTextAnalysisRequest,
     ) -> HighlightedTextAnalysisResponse:
         lookup_key = _normalise_text_key(payload.selected_text)
-        openrouter_cache_key = _text_model_speed_cache_key(lookup_key, payload.text_model_speed)
-        _record_text_frequency(payload.selected_text, payload.page_url)
+        openrouter_cache_key = _text_model_cache_key(lookup_key, payload.text_model_tier)
         logger.info("TEXT MANUAL RECHECK for '%s' → calling OpenRouter", lookup_key)
         openrouter_api_key = require_user_openrouter_api_key(request)
         return await _run_openrouter_text_analysis(payload, openrouter_cache_key, openrouter_api_key)
+
+    @app.post(
+        "/api/v1/telemetry/slang-detections",
+        response_model=SlangDetectionsTelemetryResponse,
+    )
+    @limiter.limit(settings.rate_limit_dashboard)
+    async def ingest_slang_detections(
+        request: Request,
+        payload: SlangDetectionsTelemetryRequest,
+    ) -> SlangDetectionsTelemetryResponse:
+        del request
+        items = [{"term": item.term, "count": item.count} for item in payload.items]
+        stored = record_slang_detections(
+            items,
+            unsafe_keywords=settings.unsafe_slang_keywords,
+        )
+        return SlangDetectionsTelemetryResponse(accepted=len(items), stored=stored)
+
+    @app.get(
+        "/api/v1/public/top-slang",
+        response_model=PublicTopSlangResponse,
+    )
+    @limiter.limit(settings.rate_limit_dashboard)
+    async def public_top_slang(
+        request: Request,
+        period: str = "month",
+        year: int | None = None,
+        limit: int = 20,
+    ) -> PublicTopSlangResponse:
+        del request
+        safe_period = "year" if str(period).casefold() == "year" else "month"
+        raw = list_top_slang(period=safe_period, year=year, limit=limit)
+        return PublicTopSlangResponse(**raw)
+
+    @app.get(
+        "/api/v1/admin/slang",
+        response_model=AdminSlangListResponse,
+    )
+    @limiter.limit(settings.rate_limit_dashboard)
+    async def admin_list_slang(
+        request: Request,
+        limit: int = 100,
+    ) -> AdminSlangListResponse:
+        await require_google_admin(request)
+        return AdminSlangListResponse(items=list_admin_slang(limit))
+
+    @app.patch(
+        "/api/v1/admin/slang/{normalized_term}",
+        response_model=AdminSlangItem,
+    )
+    @limiter.limit(settings.rate_limit_dashboard)
+    async def admin_update_slang(
+        request: Request,
+        normalized_term: str,
+        payload: AdminSlangModerationUpdate,
+    ) -> AdminSlangItem:
+        admin_email = await require_google_admin(request)
+        updated = update_slang_moderation(
+            normalize_slang_term(normalized_term),
+            status=payload.status,
+            reason=payload.reason,
+            updated_by=admin_email,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Slang term could not be updated.")
+        return AdminSlangItem(**updated)
 
     @app.get(
         "/api/v1/dashboard/word-frequency",
@@ -827,6 +983,7 @@ def create_app() -> FastAPI:
                 frame0_media_type=payload.frame0_media_type,
                 page_title=payload.page_title,
                 page_domain=payload.page_domain,
+                image_model_tier=payload.image_model_tier,
                 openrouter_api_key=openrouter_api_key,
             )
         except OpenRouterAuthError as exc:
@@ -836,14 +993,6 @@ def create_app() -> FastAPI:
             ) from exc
 
         flagged = result.flagged_for_review or result.confidence_score < settings.low_confidence_threshold
-        if flagged:
-            flag_image_for_review(
-                source_url=payload.source_url,
-                media_type=payload.media_type,
-                agent_meaning=result.brainrot_meaning or result.equivalent_text,
-                confidence=result.confidence_score,
-            )
-
         final = result.model_copy(update={"flagged_for_review": flagged})
 
         # ── Persist to DB cache for next time ─────────────────────────

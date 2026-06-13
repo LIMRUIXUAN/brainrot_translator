@@ -217,6 +217,77 @@ if (!window.__brainrotContentScriptLoaded) {
     return Shared.shouldRetryApiError(error);
   }
 
+  function sendAnonymousSlangDetections(result) {
+    Shared.sendAnonymousSlangDetections(runtimeSettings, result).catch(() => undefined);
+  }
+
+  function sendRuntimeMessage(message) {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage(message, (response) => {
+          const lastError = getChromeLastError();
+          if (lastError) {
+            reject(new Error(lastError.message || "Extension message failed."));
+            return;
+          }
+          resolve(response || { ok: false });
+        });
+      } catch (error) {
+        markExtensionContextInvalidated(error);
+        reject(error);
+      }
+    });
+  }
+
+  async function runOpenRouterTextAnalysis(payload) {
+    const response = await sendRuntimeMessage({
+      action: "brainrotOpenRouterTextAnalysis",
+      payload,
+      settings: runtimeSettings
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "OpenRouter text analysis failed.");
+    }
+    return response.result;
+  }
+
+  async function runTextAnalysisBackendFirst(payload) {
+    try {
+      return await postJson(TEXT_ENDPOINT, payload);
+    } catch (error) {
+      const message = String(error?.message || "").toLowerCase();
+      const needsOpenRouter = message.includes("openrouter api key");
+      if (needsOpenRouter && hasOpenRouterApiKey()) {
+        return await runOpenRouterTextAnalysis(payload);
+      }
+      throw error;
+    }
+  }
+
+  async function runOpenRouterRecheck(payload) {
+    const response = await sendRuntimeMessage({
+      action: "brainrotOpenRouterTextAnalysis",
+      payload,
+      settings: runtimeSettings
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "OpenRouter text recheck failed.");
+    }
+    return response.result;
+  }
+
+  async function runOpenRouterImageAnalysis(payload) {
+    const response = await sendRuntimeMessage({
+      action: "brainrotOpenRouterImageAnalysis",
+      payload,
+      settings: runtimeSettings
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "OpenRouter image analysis failed.");
+    }
+    return response.result;
+  }
+
   /* ── Phase 1: Page context helpers ───────────────────────────── */
   function getPageContext() {
     return {
@@ -533,6 +604,7 @@ if (!window.__brainrotContentScriptLoaded) {
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       normalizeSettings,
+      buildApiHeaders,
       clampLauncherScale,
       isMemeCandidate,
       hasKeywordHint,
@@ -830,14 +902,16 @@ if (!window.__brainrotContentScriptLoaded) {
 
     bubble.showLoadingState(anchor, "Analyzing image...");
     try {
-      const result = await postJson(MEDIA_ENDPOINT, {
+      const result = await runOpenRouterImageAnalysis({
         image_base64: payload.image_base64, media_type: payload.media_type,
+        image_model_tier: runtimeSettings.brainrotImageModelTier,
         source_url: payload.source_url, frame0_base64: payload.frame0_base64,
         frame0_media_type: payload.frame0_media_type,
         page_title: payload.page_title, page_domain: payload.page_domain
       });
       if (!result.is_brainrot) { bubble.hide(); return; }
       incrementBrainrotBadge();
+      sendAnonymousSlangDetections(result);
       bubble.showImageAnalysisResult(anchor, result, payload.previewSrc);
       // Phase 3: Save image analysis to history
       saveToHistory({
@@ -861,7 +935,7 @@ if (!window.__brainrotContentScriptLoaded) {
         error instanceof TypeError;
 
       if (isConnectionFailure) {
-        throw new Error("Connection offline: Meme analysis requires backend server");
+        throw new Error("Connection offline: image analysis requires OpenRouter access.");
       } else {
         throw error;
       }
@@ -950,21 +1024,23 @@ if (!window.__brainrotContentScriptLoaded) {
         translation: customMatch.meaning, sentiment: "neutral", confidence: 1.0
       });
       incrementBrainrotBadge();
+      sendAnonymousSlangDetections(fakeResult);
       return;
     }
 
     bubble.showLoadingState(selectionData.rect, "Translating highlighted text...");
     const ctx = getPageContext();
     try {
-      const result = await postJson(TEXT_ENDPOINT, {
+      const requestPayload = {
         selected_text: selectionData.selectedText,
         page_url: ctx.page_url,
-        text_model_speed: runtimeSettings.brainrotTextModelSpeed,
+        text_model_tier: runtimeSettings.brainrotTextModelTier,
         surrounding_text: selectionData.surroundingText,
         page_title: ctx.page_title,
         page_domain: ctx.page_domain,
         nearest_heading: selectionData.nearestHeading
-      });
+      };
+      const result = await runTextAnalysisBackendFirst(requestPayload);
       if (!result.is_brainrot) {
         bubble.showInfo(
           selectionData.rect,
@@ -984,6 +1060,7 @@ if (!window.__brainrotContentScriptLoaded) {
         });
       }
       incrementBrainrotBadge();
+      sendAnonymousSlangDetections(result);
       saveToHistory({
         type: "text", original: selectionData.selectedText,
         translation: result.equivalent_text || "", sentiment: result.sentiment_label || "unclear",
@@ -991,6 +1068,7 @@ if (!window.__brainrotContentScriptLoaded) {
       });
     } catch (error) {
       const errMsg = String(error?.message || "").toLowerCase();
+      const isMissingOpenRouterKey = errMsg.includes("openrouter api key");
       const isConnectionFailure =
         errMsg.includes("failed to fetch") ||
         errMsg.includes("networkerror") ||
@@ -1019,6 +1097,7 @@ if (!window.__brainrotContentScriptLoaded) {
             bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText, null);
           }
           incrementBrainrotBadge();
+          sendAnonymousSlangDetections(result);
           saveToHistory({
             type: "text", original: selectionData.selectedText,
             translation: result.equivalent_text || "", sentiment: result.sentiment_label || "unclear",
@@ -1026,10 +1105,10 @@ if (!window.__brainrotContentScriptLoaded) {
             model_used: result.model_used || ""
           });
         } catch (offlineErr) {
-          bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text analysis failed.");
+          bubble.showError(selectionData.rect, Shared.getFriendlyErrorMessage(error, "Text analysis failed."));
         }
       } else {
-        bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text analysis failed.");
+        bubble.showError(selectionData.rect, Shared.getFriendlyErrorMessage(error, "Text analysis failed."));
       }
     }
   }
@@ -1043,10 +1122,10 @@ if (!window.__brainrotContentScriptLoaded) {
     bubble.showLoadingState(selectionData.rect, "Rechecking highlighted text...");
     const ctx = getPageContext();
     try {
-      const result = await postJson(RECHECK_TEXT_ENDPOINT, {
+      const result = await runOpenRouterRecheck({
         selected_text: selectionData.selectedText,
         page_url: ctx.page_url,
-        text_model_speed: runtimeSettings.brainrotTextModelSpeed,
+        text_model_tier: runtimeSettings.brainrotTextModelTier,
         surrounding_text: selectionData.surroundingText,
         page_title: ctx.page_title,
         page_domain: ctx.page_domain,
@@ -1066,6 +1145,7 @@ if (!window.__brainrotContentScriptLoaded) {
       bubble.showTextAnalysisResult(selectionData.rect, result, selectionData.selectedText, async () => {
         await runSelectionRecheck(selectionData);
       });
+      sendAnonymousSlangDetections(result);
     } catch (error) {
       const errMsg = String(error?.message || "").toLowerCase();
       const isConnectionFailure =
@@ -1078,9 +1158,9 @@ if (!window.__brainrotContentScriptLoaded) {
         error instanceof TypeError;
 
       if (isConnectionFailure) {
-        bubble.showError(selectionData.rect, "Recheck unavailable: backend connection required.");
+        bubble.showError(selectionData.rect, "Recheck unavailable: OpenRouter connection required.");
       } else {
-        bubble.showError(selectionData.rect, error instanceof Error ? error.message : "Text recheck failed.");
+        bubble.showError(selectionData.rect, Shared.getFriendlyErrorMessage(error, "Text recheck failed."));
       }
     }
   }
@@ -1116,7 +1196,7 @@ if (!window.__brainrotContentScriptLoaded) {
       await analyzeMediaPayload(element, payload);
     } catch (error) {
       if (requestId !== hoverRequestId) return;
-      bubble.showError(element, error instanceof Error ? error.message : "Unexpected image analysis error.");
+      bubble.showError(element, Shared.getFriendlyErrorMessage(error, "Unexpected image analysis error."));
     }
   }
 
@@ -1278,7 +1358,7 @@ if (!window.__brainrotContentScriptLoaded) {
         }
         await analyzeMediaPayload(dock, payload);
       } catch (error) {
-        bubble.showError(dock, error instanceof Error ? error.message : "Screenshot capture failed.");
+        bubble.showError(dock, Shared.getFriendlyErrorMessage(error, "Screenshot capture failed."));
       }
     });
     hoverToggle.addEventListener("click", async () => {
@@ -1360,7 +1440,7 @@ if (!window.__brainrotContentScriptLoaded) {
       const payload = await createFilePayload(file);
       await analyzeMediaPayload(createLauncher(), payload);
     } catch (error) {
-      bubble.showError(createLauncher(), error instanceof Error ? error.message : "Clipboard image analysis failed.");
+      bubble.showError(createLauncher(), Shared.getFriendlyErrorMessage(error, "Clipboard image analysis failed."));
     }
   });
 
@@ -1458,7 +1538,7 @@ if (!window.__brainrotContentScriptLoaded) {
           createMediaUrlPayload(sourceUrl)
             .then((payload) => analyzeMediaPayload(anchor, payload))
             .catch((error) => {
-              bubble.showError(anchor, error instanceof Error ? error.message : "Image analysis failed.");
+              bubble.showError(anchor, Shared.getFriendlyErrorMessage(error, "Image analysis failed."));
             });
           sendResponse({ ok: true });
           return false;

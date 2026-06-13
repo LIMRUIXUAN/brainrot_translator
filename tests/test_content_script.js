@@ -3,6 +3,21 @@ const fs = require("node:fs");
 const test = require("node:test");
 const vm = require("node:vm");
 
+function loadSharedApi() {
+  const sharedSource = fs.readFileSync("extension/shared.js", "utf8");
+  const module = { exports: {} };
+  vm.runInNewContext(
+    sharedSource,
+    {
+      module,
+      window: {},
+      globalThis: {}
+    },
+    { filename: "extension/shared.js" }
+  );
+  return module.exports;
+}
+
 function loadContentScriptApi() {
   const sharedSource = fs.readFileSync("extension/shared.js", "utf8");
   const source = fs.readFileSync("extension/content_script.js", "utf8");
@@ -56,33 +71,61 @@ test("normalizeSettings trims values and preserves boolean edge cases", () => {
   const api = loadContentScriptApi();
   const normalized = api.normalizeSettings({
     brainrotApiBaseUrl: " http://localhost:9000/// ",
-    brainrotApiAuthToken: " secret-token ",
+    brainrotOpenRouterKeyPresent: true,
+    brainrotOpenRouterKeyStorage: "local",
+    brainrotRememberOpenRouterKey: false,
     brainrotEnableTextSelection: false,
     brainrotEnableHoverDetection: "false",
     brainrotEnableInlineAnnotation: true,
-    brainrotTextModelSpeed: "slow",
     brainrotLauncherPosition: { left: 14.4, top: 92.6 },
     brainrotLauncherScale: 2.2,
     brainrotLauncherMinimized: true
   });
 
   assert.equal(normalized.brainrotApiBaseUrl, "http://localhost:9000");
-  assert.equal(normalized.brainrotApiAuthToken, "secret-token");
+  assert.equal(normalized.brainrotOpenRouterKeyPresent, true);
+  assert.equal(normalized.brainrotOpenRouterKeyStorage, "local");
+  assert.equal(normalized.brainrotRememberOpenRouterKey, false);
   assert.equal(normalized.brainrotEnableTextSelection, false);
   assert.equal(normalized.brainrotEnableHoverDetection, true);
   assert.equal(normalized.brainrotEnableInlineAnnotation, true);
-  assert.equal(normalized.brainrotTextModelSpeed, "slow");
   assert.equal(normalized.brainrotLauncherPosition.left, 14);
   assert.equal(normalized.brainrotLauncherPosition.top, 93);
   assert.equal(normalized.brainrotLauncherScale, 1.5);
   assert.equal(normalized.brainrotLauncherMinimized, true);
 });
 
-test("normalizeSettings defaults invalid text model speed to fast", () => {
+test("buildApiHeaders never sends OpenRouter key to backend", () => {
   const api = loadContentScriptApi();
-  const normalized = api.normalizeSettings({ brainrotTextModelSpeed: "turbo" });
+  const headers = api.buildApiHeaders({ brainrotOpenRouterKeyPresent: true }, true);
 
-  assert.equal(normalized.brainrotTextModelSpeed, "fast");
+  assert.equal(headers["Content-Type"], "application/json");
+  assert.equal(headers["X-OpenRouter-API-Key"], undefined);
+  assert.equal(headers.Authorization, undefined);
+});
+
+test("getFriendlyErrorMessage hides raw fetch abort wording", () => {
+  const api = loadSharedApi();
+  const error = new Error("The user aborted a request.");
+
+  assert.equal(
+    api.getFriendlyErrorMessage(error, "Analysis failed."),
+    "The request timed out or was cancelled. Try again, check your connection, or switch to a faster model."
+  );
+});
+
+test("normalizeSettings defaults invalid key storage and model tiers", () => {
+  const api = loadContentScriptApi();
+  const normalized = api.normalizeSettings({
+    brainrotOpenRouterKeyStorage: "synced",
+    brainrotTextModelTier: "unknown",
+    brainrotImageModelTier: "unknown"
+  });
+
+  assert.equal(normalized.brainrotOpenRouterKeyStorage, "none");
+  assert.equal(normalized.brainrotRememberOpenRouterKey, true);
+  assert.equal(normalized.brainrotTextModelTier, "free");
+  assert.equal(normalized.brainrotImageModelTier, "free");
 });
 
 test("clampLauncherScale clamps and rounds boundary values", () => {

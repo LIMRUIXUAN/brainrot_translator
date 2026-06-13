@@ -16,8 +16,15 @@
       <div class="onboarding-card">
         <div class="onboarding-step is-active" data-onboarding-step="0">
           <div class="onboarding-emoji">🧠</div>
-          <h2>Welcome to Brainrot Translator!</h2>
-          <p>Translate internet slang and meme-coded text without leaving the page.</p>
+          <h2>Privacy First</h2>
+          <p>Your OpenRouter key stays in this browser. Anonymous slang frequency sharing is optional.</p>
+          <label class="toggle-row onboarding-toggle-row">
+            <span>
+              <strong>Share anonymous slang frequency</strong>
+              <small>Sends only detected terms and counts. No page text, URLs, images, or API keys.</small>
+            </span>
+            <input id="onboardingShareFrequency" type="checkbox" />
+          </label>
         </div>
         <div class="onboarding-step" data-onboarding-step="1">
           <div class="onboarding-emoji">✍️</div>
@@ -50,11 +57,10 @@
     <section class="hero-card">
       <div class="hero-mark">🧠</div>
       <div>
-        <p class="hero-kicker">Persistent Test Panel</p>
+        <p class="hero-kicker">Extension Translator</p>
         <h1>Brainrot Translator</h1>
         <p class="hero-copy">
-          This panel stays open while you click the page. The floating pet replies on the webpage, not inside this
-          panel.
+          Translate internet slang and meme images while you browse. Your AI key and local history stay in your browser.
         </p>
       </div>
     </section>
@@ -163,14 +169,37 @@
       <label class="field">
         <span>OpenRouter API Key</span>
         <input id="apiAuthToken" type="password" spellcheck="false" autocomplete="off" placeholder="Required for AI features" />
-        <small>Required for AI recheck, reverse translation, and image analysis. Local/offline glossary text may still work without it.</small>
+        <strong id="apiKeyStatus" class="api-key-status is-missing">No key saved</strong>
+        <small id="apiKeyStorageHint">Saved only in this Chrome browser profile. Never sent to Brainrot Translator servers.</small>
+      </label>
+      <label class="toggle-row">
+        <span>
+          <strong>Remember OpenRouter key on this device</strong>
+          <small>Turn off to forget the key when Chrome closes.</small>
+        </span>
+        <input id="rememberOpenRouterKey" type="checkbox" />
+      </label>
+      <button id="clearApiKeyButton" class="ghost-button" type="button">Clear OpenRouter Key</button>
+      <label class="field compact-field">
+        <span>Text Model</span>
+        <select id="textModelTier">
+          <option value="free">Free - NVIDIA</option>
+          <option value="premium">Premium - DeepSeek</option>
+        </select>
       </label>
       <label class="field compact-field">
-        <span>Text Model Speed</span>
-        <select id="textModelSpeed">
-          <option value="fast">Fast - DeepSeek</option>
-          <option value="slow">Slow - NVIDIA Nemotron</option>
+        <span>Image Model</span>
+        <select id="imageModelTier">
+          <option value="free">Free - NVIDIA</option>
+          <option value="premium">Premium - Gemini</option>
         </select>
+      </label>
+      <label class="toggle-row">
+        <span>
+          <strong>Share anonymous slang frequency</strong>
+          <small>Contribute only detected terms and counts to the shared monthly leaderboard.</small>
+        </span>
+        <input id="shareAnonymousFrequency" type="checkbox" />
       </label>
 
       <div class="button-row">

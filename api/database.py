@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, text
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint, create_engine, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -133,6 +133,45 @@ class BrainrotWordFrequency(Base):
         nullable=False,
     )
     last_page_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+
+
+class MonthlySlangFrequency(Base):
+    """Anonymous shared slang counts bucketed by calendar month."""
+
+    __tablename__ = "monthly_slang_frequency"
+    __table_args__ = (
+        UniqueConstraint("normalized_term", "month_start", name="uq_monthly_slang_frequency_term_month"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    normalized_term: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    display_label: Mapped[str] = mapped_column(String(256), nullable=False)
+    month_start: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class SlangModeration(Base):
+    """Admin moderation state for public leaderboard terms."""
+
+    __tablename__ = "slang_moderation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    normalized_term: Mapped[str] = mapped_column(String(256), unique=True, nullable=False, index=True)
+    display_label: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="visible", nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    unsafe_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_by: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -369,91 +408,348 @@ def save_cached_text(lookup_key: str, data: dict[str, Any]) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Dashboard word-frequency helpers
+# Shared monthly slang-frequency helpers
 # ---------------------------------------------------------------------------
+
+MODERATION_VISIBLE_STATUSES = {"visible", "hidden", "banned"}
+
+
+def normalize_slang_term(term: str) -> str:
+    return " ".join(term.strip().casefold().split())[:256]
+
+
+def month_start_for(value: Optional[datetime] = None) -> date:
+    current = value or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return date(current.year, current.month, 1)
+
+
+def _is_unsafe_term(normalized_term: str, unsafe_keywords: tuple[str, ...]) -> bool:
+    lowered = normalized_term.casefold()
+    return any(keyword.strip().casefold() and keyword.strip().casefold() in lowered for keyword in unsafe_keywords)
+
+
+def _get_or_create_moderation(
+    session: Session,
+    *,
+    normalized_term: str,
+    display_label: str,
+    unsafe_flag: bool,
+    updated_by: Optional[str] = None,
+) -> SlangModeration:
+    row = (
+        session.query(SlangModeration)
+        .filter(SlangModeration.normalized_term == normalized_term)
+        .first()
+    )
+    now = datetime.now(timezone.utc)
+    if row is None:
+        row = SlangModeration(
+            normalized_term=normalized_term,
+            display_label=display_label,
+            status="hidden" if unsafe_flag else "visible",
+            reason="Auto-hidden by unsafe keyword filter." if unsafe_flag else None,
+            unsafe_flag=unsafe_flag,
+            updated_at=now,
+            updated_by=updated_by,
+        )
+        session.add(row)
+        return row
+
+    row.display_label = display_label or row.display_label
+    if unsafe_flag and not row.unsafe_flag:
+        row.unsafe_flag = True
+        row.status = "hidden"
+        row.reason = row.reason or "Auto-hidden by unsafe keyword filter."
+        row.updated_at = now
+        row.updated_by = updated_by
+    return row
+
 
 def increment_word_frequencies(
     terms: dict[str, str],
     *,
     page_url: Optional[str] = None,
 ) -> bool:
-    """Increment dashboard counters for matched highlighted-text slang terms."""
-    if not terms:
+    """Legacy wrapper: increment anonymous current-month counters."""
+    del page_url
+    return record_slang_detections(
+        [{"term": label, "count": 1} for label in terms.values()],
+        unsafe_keywords=get_settings().unsafe_slang_keywords,
+    )
+
+
+def record_slang_detections(
+    items: list[dict[str, Any]],
+    *,
+    unsafe_keywords: tuple[str, ...],
+    seen_at: Optional[datetime] = None,
+) -> bool:
+    """Store opt-in anonymous slang counts in the current calendar month bucket."""
+    if not items:
         return True
 
     session_factory = get_session_factory()
     if session_factory is None:
         return False
 
-    now = datetime.now(timezone.utc)
-    cleaned_page_url = (page_url or "").strip() or None
+    now = seen_at or datetime.now(timezone.utc)
+    bucket = month_start_for(now)
+    aggregate: dict[str, dict[str, Any]] = {}
+    for item in items:
+        label = " ".join(str(item.get("term", "")).strip().split())[:256]
+        normalized = normalize_slang_term(label)
+        if not normalized or not label:
+            continue
+        try:
+            count = max(1, min(int(item.get("count", 1)), 100))
+        except (TypeError, ValueError):
+            count = 1
+        if normalized not in aggregate:
+            aggregate[normalized] = {"term": label, "count": 0}
+        aggregate[normalized]["count"] += count
+
+    if not aggregate:
+        return True
 
     try:
         with session_factory() as session:
-            for normalized_term, display_label in terms.items():
-                normalized = normalized_term.strip().casefold()
-                label = display_label.strip()
-                if not normalized or not label:
-                    continue
-
+            for normalized, data in aggregate.items():
+                label = str(data["term"])
+                unsafe_flag = _is_unsafe_term(normalized, unsafe_keywords)
+                _get_or_create_moderation(
+                    session,
+                    normalized_term=normalized,
+                    display_label=label,
+                    unsafe_flag=unsafe_flag,
+                )
                 row = (
-                    session.query(BrainrotWordFrequency)
-                    .filter(BrainrotWordFrequency.normalized_term == normalized)
+                    session.query(MonthlySlangFrequency)
+                    .filter(
+                        MonthlySlangFrequency.normalized_term == normalized,
+                        MonthlySlangFrequency.month_start == bucket,
+                    )
                     .first()
                 )
                 if row is None:
-                    row = BrainrotWordFrequency(
+                    row = MonthlySlangFrequency(
                         normalized_term=normalized,
                         display_label=label,
+                        month_start=bucket,
                         count=0,
                     )
                     session.add(row)
-
                 row.display_label = label
-                row.count += 1
+                row.count += int(data["count"])
                 row.last_seen_at = now
-                row.last_page_url = cleaned_page_url
             session.commit()
         return True
     except SQLAlchemyError:
-        logger.exception(
-            "increment_word_frequencies failed for terms=%s page_url=%s",
-            list(terms.keys())[:20],
-            page_url,
-        )
+        logger.exception("record_slang_detections failed for items=%s", items[:20])
         return False
 
 
+def _visible_filter_query(session: Session):
+    del session
+    return select(SlangModeration.normalized_term).where(SlangModeration.status.in_(("hidden", "banned")))
+
+
 def list_word_frequencies(limit: int = 20) -> list[dict[str, Any]]:
-    """Return dashboard counters sorted by frequency, then recency."""
+    """Return current-month public counters sorted by frequency."""
+    return list_top_slang(period="month", limit=limit)["items"]
+
+
+def list_top_slang(
+    *,
+    period: str = "month",
+    limit: int = 20,
+    year: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    session_factory = get_session_factory()
+    current = now or datetime.now(timezone.utc)
+    target_year = int(year or current.year)
+    safe_limit = max(1, min(int(limit), 100))
+    if session_factory is None:
+        return {
+            "period": "year" if period == "year" else "month",
+            "year": target_year,
+            "month": None if period == "year" else current.month,
+            "items": [],
+        }
+
+    try:
+        with session_factory() as session:
+            hidden_terms = _visible_filter_query(session)
+            if period == "year":
+                start = date(target_year, 1, 1)
+                end = date(target_year + 1, 1, 1)
+                rows = (
+                    session.query(
+                        MonthlySlangFrequency.display_label,
+                        func.sum(MonthlySlangFrequency.count).label("count"),
+                        func.max(MonthlySlangFrequency.last_seen_at).label("last_seen_at"),
+                    )
+                    .filter(
+                        MonthlySlangFrequency.month_start >= start,
+                        MonthlySlangFrequency.month_start < end,
+                        ~MonthlySlangFrequency.normalized_term.in_(hidden_terms),
+                    )
+                    .group_by(MonthlySlangFrequency.normalized_term, MonthlySlangFrequency.display_label)
+                    .order_by(text("count DESC"), text("last_seen_at DESC"), MonthlySlangFrequency.display_label.asc())
+                    .limit(safe_limit)
+                    .all()
+                )
+                return {
+                    "period": "year",
+                    "year": target_year,
+                    "month": None,
+                    "items": [
+                        {
+                            "term": row.display_label,
+                            "count": int(row.count or 0),
+                            "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+                        }
+                        for row in rows
+                    ],
+                }
+
+            bucket = month_start_for(current)
+            rows = (
+                session.query(MonthlySlangFrequency)
+                .filter(
+                    MonthlySlangFrequency.month_start == bucket,
+                    ~MonthlySlangFrequency.normalized_term.in_(hidden_terms),
+                )
+                .order_by(
+                    MonthlySlangFrequency.count.desc(),
+                    MonthlySlangFrequency.last_seen_at.desc(),
+                    MonthlySlangFrequency.display_label.asc(),
+                )
+                .limit(safe_limit)
+                .all()
+            )
+            return {
+                "period": "month",
+                "year": bucket.year,
+                "month": bucket.month,
+                "items": [
+                    {
+                        "term": row.display_label,
+                        "count": row.count,
+                        "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+                    }
+                    for row in rows
+                ],
+            }
+    except SQLAlchemyError:
+        logger.exception("list_top_slang failed for period=%s year=%s limit=%s", period, year, limit)
+        return {
+            "period": "year" if period == "year" else "month",
+            "year": target_year,
+            "month": None if period == "year" else current.month,
+            "items": [],
+        }
+
+
+def list_admin_slang(limit: int = 100) -> list[dict[str, Any]]:
     session_factory = get_session_factory()
     if session_factory is None:
         return []
 
-    safe_limit = max(1, min(int(limit), 100))
+    safe_limit = max(1, min(int(limit), 500))
     try:
         with session_factory() as session:
+            totals = (
+                session.query(
+                    MonthlySlangFrequency.normalized_term.label("normalized_term"),
+                    func.sum(MonthlySlangFrequency.count).label("count"),
+                    func.max(MonthlySlangFrequency.last_seen_at).label("last_seen_at"),
+                )
+                .group_by(MonthlySlangFrequency.normalized_term)
+                .subquery()
+            )
             rows = (
-                session.query(BrainrotWordFrequency)
+                session.query(SlangModeration, totals.c.count, totals.c.last_seen_at)
+                .outerjoin(totals, SlangModeration.normalized_term == totals.c.normalized_term)
                 .order_by(
-                    BrainrotWordFrequency.count.desc(),
-                    BrainrotWordFrequency.last_seen_at.desc(),
-                    BrainrotWordFrequency.display_label.asc(),
+                    SlangModeration.status.desc(),
+                    text("count DESC"),
+                    SlangModeration.display_label.asc(),
                 )
                 .limit(safe_limit)
                 .all()
             )
             return [
                 {
-                    "term": row.display_label,
-                    "count": row.count,
-                    "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+                    "term": moderation.display_label,
+                    "count": int(count or 0),
+                    "status": moderation.status,
+                    "reason": moderation.reason,
+                    "unsafe_flag": moderation.unsafe_flag,
+                    "last_seen_at": last_seen_at.isoformat() if last_seen_at else None,
+                    "updated_at": moderation.updated_at.isoformat() if moderation.updated_at else None,
+                    "updated_by": moderation.updated_by,
                 }
-                for row in rows
+                for moderation, count, last_seen_at in rows
             ]
     except SQLAlchemyError:
-        logger.exception("list_word_frequencies failed for limit=%s", limit)
+        logger.exception("list_admin_slang failed")
         return []
+
+
+def update_slang_moderation(
+    normalized_term: str,
+    *,
+    status: str,
+    reason: Optional[str],
+    updated_by: str,
+) -> Optional[dict[str, Any]]:
+    if status not in MODERATION_VISIBLE_STATUSES:
+        return None
+
+    normalized = normalize_slang_term(normalized_term)
+    if not normalized:
+        return None
+
+    session_factory = get_session_factory()
+    if session_factory is None:
+        return None
+
+    try:
+        with session_factory() as session:
+            row = (
+                session.query(SlangModeration)
+                .filter(SlangModeration.normalized_term == normalized)
+                .first()
+            )
+            if row is None:
+                display_label = normalized_term.strip() or normalized
+                row = SlangModeration(
+                    normalized_term=normalized,
+                    display_label=display_label,
+                    unsafe_flag=False,
+                )
+                session.add(row)
+            row.status = status
+            row.reason = reason
+            row.updated_at = datetime.now(timezone.utc)
+            row.updated_by = updated_by
+            session.commit()
+            return {
+                "term": row.display_label,
+                "count": 0,
+                "status": row.status,
+                "reason": row.reason,
+                "unsafe_flag": row.unsafe_flag,
+                "last_seen_at": None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "updated_by": row.updated_by,
+            }
+    except SQLAlchemyError:
+        logger.exception("update_slang_moderation failed for term=%s", normalized_term)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +821,7 @@ def save_cached_image(image_hash: str, data: dict[str, Any]) -> bool:
 
 
 def get_dashboard_stats() -> dict[str, Any]:
-    """Return aggregate dashboard statistics."""
+    """Return aggregate dashboard statistics for public current-month slang."""
     session_factory = get_session_factory()
     defaults: dict[str, Any] = {
         "total_text_analyses": 0,
@@ -541,12 +837,17 @@ def get_dashboard_stats() -> dict[str, Any]:
         with session_factory() as session:
             total_text = session.query(CachedTextTranslation).count()
             total_image = session.query(CachedImageAnalysis).count()
-            unique_terms = session.query(BrainrotWordFrequency).count()
-            top_row = (
-                session.query(BrainrotWordFrequency)
-                .order_by(BrainrotWordFrequency.count.desc())
-                .first()
+            bucket = month_start_for()
+            hidden_terms = _visible_filter_query(session)
+            visible_rows = (
+                session.query(MonthlySlangFrequency)
+                .filter(
+                    MonthlySlangFrequency.month_start == bucket,
+                    ~MonthlySlangFrequency.normalized_term.in_(hidden_terms),
+                )
             )
+            unique_terms = visible_rows.count()
+            top_row = visible_rows.order_by(MonthlySlangFrequency.count.desc()).first()
             return {
                 "total_text_analyses": total_text,
                 "total_image_analyses": total_image,

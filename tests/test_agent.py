@@ -59,7 +59,7 @@ class BrainrotAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.equivalent_text, selected_text)
         self.assertIn("No brainrot", result.formal_explanation or "")
 
-    async def test_text_model_speed_selects_fast_or_slow_model(self) -> None:
+    async def test_text_model_tier_selects_free_or_premium_model(self) -> None:
         calls = []
 
         async def fake_openrouter_call(*, payload, timeout_seconds, openrouter_api_key):
@@ -77,21 +77,21 @@ class BrainrotAgentTests(unittest.IsolatedAsyncioTestCase):
             }
 
         with patch.object(self.agent, "_execute_openrouter_call", fake_openrouter_call):
-            fast = await self.agent.analyze_highlighted_text(
+            free = await self.agent.analyze_highlighted_text(
                 "he has rizz",
-                text_model_speed="fast",
+                text_model_tier="free",
                 openrouter_api_key="user-key",
             )
-            slow = await self.agent.analyze_highlighted_text(
+            premium = await self.agent.analyze_highlighted_text(
                 "he has rizz",
-                text_model_speed="slow",
+                text_model_tier="premium",
                 openrouter_api_key="user-key",
             )
 
-        self.assertEqual(fast.model_used, self.agent.settings.openrouter_text_fast_model)
-        self.assertEqual(slow.model_used, self.agent.settings.openrouter_text_slow_model)
-        self.assertEqual(calls[0], (self.agent.settings.openrouter_text_fast_model, 12.0))
-        self.assertEqual(calls[1], (self.agent.settings.openrouter_text_slow_model, 90.0))
+        self.assertEqual(free.model_used, self.agent.settings.openrouter_text_free_model)
+        self.assertEqual(premium.model_used, self.agent.settings.openrouter_text_premium_model)
+        self.assertEqual(calls[0], (self.agent.settings.openrouter_text_free_model, 90.0))
+        self.assertEqual(calls[1], (self.agent.settings.openrouter_text_premium_model, 30.0))
 
     async def test_image_timeout_returns_safe_fallback(self) -> None:
         with patch.object(

@@ -41,6 +41,7 @@ class ReverseTranslateRequest(BaseModel):
     text: str = Field(..., min_length=1)
     page_url: Optional[str] = None
     text_model_speed: Literal["fast", "slow"] = "fast"
+    text_model_tier: Literal["free", "premium"] = "free"
 
     @field_validator("text")
     @classmethod
@@ -72,6 +73,7 @@ class HighlightedTextAnalysisRequest(BaseModel):
 
     selected_text: str = Field(..., min_length=1)
     text_model_speed: Literal["fast", "slow"] = "fast"
+    text_model_tier: Literal["free", "premium"] = "free"
     page_url: Optional[str] = None
     surrounding_text: Optional[str] = None
     page_title: Optional[str] = None
@@ -136,6 +138,7 @@ class ScreenshotMediaRequest(BaseModel):
 
     image_base64: str = Field(..., min_length=1)
     media_type: str
+    image_model_tier: Literal["free", "premium"] = "free"
     source_url: Optional[str] = None
     frame0_base64: Optional[str] = None
     frame0_media_type: Optional[str] = None
@@ -240,3 +243,75 @@ class DashboardStatsResponse(BaseModel):
     unique_terms: int = 0
     top_term: Optional[str] = None
     top_term_count: int = 0
+
+
+class SlangDetectionItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    term: str = Field(..., min_length=1, max_length=256)
+    count: int = Field(default=1, ge=1, le=100)
+
+    @field_validator("term")
+    @classmethod
+    def validate_term(cls, value: str) -> str:
+        cleaned = " ".join(value.strip().split())
+        if not cleaned:
+            raise ValueError("term cannot be empty")
+        return cleaned[:256]
+
+
+class SlangDetectionsTelemetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[SlangDetectionItem] = Field(..., min_length=1, max_length=50)
+    extension_version: Optional[str] = Field(default=None, max_length=64)
+
+
+class SlangDetectionsTelemetryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accepted: int = 0
+    stored: bool = False
+
+
+class PublicTopSlangResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    period: Literal["month", "year"]
+    year: int
+    month: Optional[int] = None
+    items: list[WordFrequencyItem]
+
+
+class AdminSlangItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    term: str
+    count: int = 0
+    status: Literal["visible", "hidden", "banned"] = "visible"
+    reason: Optional[str] = None
+    unsafe_flag: bool = False
+    last_seen_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    updated_by: Optional[str] = None
+
+
+class AdminSlangListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[AdminSlangItem]
+
+
+class AdminSlangModerationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["visible", "hidden", "banned"]
+    reason: Optional[str] = Field(default=None, max_length=512)
+
+    @field_validator("reason")
+    @classmethod
+    def validate_reason(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None

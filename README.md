@@ -11,8 +11,8 @@ Use these steps when setting up the project on a new machine or after cloning a 
 - Python 3.11 or newer.
 - Google Chrome or another Chromium browser that supports Manifest V3 extensions.
 - PowerShell on Windows for the commands below.
-- Optional: each extension user needs their own OpenRouter API key for DeepSeek text recheck, reverse translation, and image/GIF analysis.
-- Optional: a database URL for cache, review staging, and the Brainrot Frequency dashboard.
+- Optional: each extension user needs their own OpenRouter API key for AI recheck, reverse translation, and image/GIF analysis.
+- Optional for local testing, required for production: `DATABASE_URL` for the shared monthly Top Slang Frequency leaderboard.
 
 ### 1. Create and activate the virtual environment
 
@@ -49,23 +49,33 @@ BRAINROT_API_BASE_URL=http://127.0.0.1:8000
 BRAINROT_LOW_CONFIDENCE_THRESHOLD=0.7
 ```
 
-Recommended setup with OpenRouter model choices:
+Recommended setup with OpenRouter model tier choices:
 
 ```env
-OPENROUTER_TEXT_MODEL=deepseek/deepseek-v4-flash
+OPENROUTER_TEXT_FREE_MODEL=nvidia/nemotron-3-super-120b-a12b:free
+OPENROUTER_TEXT_PREMIUM_MODEL=deepseek/deepseek-v4-flash
+OPENROUTER_IMAGE_FREE_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+OPENROUTER_IMAGE_PREMIUM_MODEL=google/gemini-3.1-flash-lite
 BRAINROT_API_BASE_URL=http://127.0.0.1:8000
 BRAINROT_LOW_CONFIDENCE_THRESHOLD=0.7
 ```
 
 Do not put a shared OpenRouter API key in `.env`. Enter the user's OpenRouter API key in the extension side panel under `Settings / Status -> OpenRouter API Key`.
 
-Add a database if you want cache, low-confidence review staging, and dashboard frequency counts:
+Add a database for shared monthly Top Slang Frequency:
 
 ```env
 DATABASE_URL=sqlite:///./brainrot_translator.db
 ```
 
-SQLite is the easiest local option. PostgreSQL also works if SQLAlchemy can load the driver for your URL.
+SQLite is the easiest local option. For a real public extension, use a hosted PostgreSQL database and install the matching SQLAlchemy driver for your deployment URL. The shared leaderboard stores detected slang terms and counts only; it does not store user OpenRouter API keys, raw page text, URLs, domains, or image payloads.
+
+Admin moderation uses Google login:
+
+```env
+GOOGLE_ADMIN_CLIENT_ID=your-google-oauth-client-id.apps.googleusercontent.com
+ADMIN_GOOGLE_EMAILS=you@example.com
+```
 
 ### 4. Start the backend
 
@@ -97,7 +107,7 @@ Expected result includes:
 }
 ```
 
-`user_openrouter_key_present` is `false` when the request does not include the user's OpenRouter API key. Local text translation can still work without it, but forced recheck, reverse translation, remote text fallback, and image/GIF analysis require the user key from extension settings.
+`user_openrouter_key_present` remains `false` for normal extension traffic because the production extension does not send OpenRouter keys to the backend. The key is kept in the extension and used by the background service worker to call OpenRouter directly.
 
 ### 6. Load the Chrome extension
 
@@ -109,8 +119,10 @@ Expected result includes:
 6. Click the Brainrot Translator extension icon.
 7. In the side panel, set API Base URL to `http://127.0.0.1:8000`.
 8. Enter your OpenRouter API key if you want AI recheck, reverse translation, or image analysis.
-9. Click `Check Health`.
-10. Click `Check Active Page`.
+9. Choose Free or Premium model tiers for text and image.
+10. Choose whether to share anonymous slang frequency counts.
+11. Click `Check Health`.
+12. Click `Check Active Page`.
 
 If you reload the extension during development, refresh the webpage tab too. Old content scripts can otherwise show `Extension context invalidated` errors.
 
@@ -121,21 +133,31 @@ Highlighted text:
 1. Highlight text such as `he has rizz`.
 2. Click `Translate` if confirmation mode is enabled.
 3. The floating pet bubble should show a formal translation.
-4. Click `Recheck` to force the DeepSeek/OpenRouter text recheck route.
+4. Click `Recheck` to force the selected OpenRouter text model route.
 
 Dashboard frequency:
 
 1. Make sure `DATABASE_URL` is set.
 2. Restart the backend after editing `.env`.
-3. Highlight text containing slang, such as `he has rizz`.
-4. Open the side panel.
-5. Click `Refresh` under `Brainrot Frequency`.
+3. Enable `Share anonymous slang frequency` in Settings.
+4. Highlight text containing slang, such as `he has rizz`.
+5. Open the side panel.
+6. Click `Refresh` under `Top Slang Frequency`.
+
+The current-month chart resets automatically each month because counts are stored by calendar month. The yearly leaderboard is available from the public API.
+
+Admin moderation:
+
+1. Sign in with Google in your admin client and send the Google ID token as `Authorization: Bearer <id_token>`.
+2. Use `GET /api/v1/admin/slang` to review terms.
+3. Use `PATCH /api/v1/admin/slang/{normalized_term}` to set `visible`, `hidden`, or `banned`.
+4. Public charts exclude `hidden` and `banned` terms but keep internal counts.
 
 Image/GIF:
 
 1. Enable `Hover image or GIF analysis` in the side panel or floating launcher.
 2. Hover likely meme media for at least 600ms.
-3. The backend routes media analysis through the configured OpenRouter vision model.
+3. The extension background service worker routes media analysis directly to the configured OpenRouter vision model.
 
 ### 8. API smoke tests
 
@@ -149,7 +171,7 @@ Invoke-RestMethod `
   -Body '{"selected_text":"he has rizz","page_url":"https://example.com"}'
 ```
 
-Force DeepSeek text recheck:
+Force selected-tier text recheck:
 
 ```powershell
 Invoke-RestMethod `
@@ -162,7 +184,13 @@ Invoke-RestMethod `
 Read dashboard frequency:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8000/api/v1/dashboard/word-frequency?limit=20
+Invoke-RestMethod "http://127.0.0.1:8000/api/v1/public/top-slang?period=month&limit=20"
+```
+
+Read annual countdown:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/v1/public/top-slang?period=year&year=2026&limit=50"
 ```
 
 ### 9. Run tests
@@ -295,13 +323,13 @@ brainrot_translator/
 - Build the local FLAN-T5 training CSV with `python scripts/prepare_training_dataset.py`.
 - Train in Google Colab with `notebooks/train_flan_t5_colab.ipynb`, then place the downloaded model folder at `models/brainrot-translator-v1`.
 - `/translate` uses `models/brainrot-translator-v1` when present and falls back to the local glossary mock when the model folder is missing.
-- `/api/v1/analyze-highlighted-text` also prefers the local model when installed; OpenRouter is only a fallback for text cache misses without a local model, and that fallback requires the user's `X-OpenRouter-API-Key` request header.
+- `/api/v1/analyze-highlighted-text` still supports backend-local text analysis. The production extension calls OpenRouter directly from the background service worker when AI is required.
 - Build the local good/bad translation classifier dataset with `python scripts/prepare_quality_classifier_dataset.py`.
 - Train the local quality classifier with `python scripts/train_quality_classifier.py`, or use `notebooks/train_quality_classifier_colab.ipynb` on Colab GPU, then place the saved folder at `models/brainrot-quality-classifier-v1`.
 - When `models/brainrot-quality-classifier-v1` exists, highlighted-text confidence comes from that local classifier. Without it, the backend uses a deterministic heuristic confidence score.
 - `slang_terms.json` is not updated automatically by app usage; database cache/review rows are separate from the fixed vocabulary file.
 - `.env` stays local; copy from `.env.example` and configure model names, database, thresholds, and API base URL as needed.
-- OpenRouter API keys are user-owned and entered in the extension side panel. They are sent to the backend as `X-OpenRouter-API-Key` only for requests that may need OpenRouter.
+- OpenRouter API keys are user-owned and entered in the extension side panel. By default they are remembered in `chrome.storage.local` for the current Chrome browser profile; users can turn off "Remember OpenRouter key on this device" to keep the key only in `chrome.storage.session` until Chrome closes. Keys are sent directly to OpenRouter by the extension background service worker, not to your backend, telemetry routes, database, `.env`, or Chrome sync.
 - `DATABASE_URL` is optional for cache/review persistence.
 - The extension defaults to `http://127.0.0.1:8000` and can be overridden with `BRAINROT_API_BASE_URL`.
 - The extension action now opens a persistent side panel for testing; the floating pet still replies on the webpage itself while the side panel stays open for settings and `/health`.

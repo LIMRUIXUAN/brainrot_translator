@@ -116,6 +116,9 @@ Useful but secondary:
 - `/api/v1/reverse-translate`
 - `/api/v1/analyze-screenshot-media`
 - `/api/v1/analyze-image`
+- `/api/v1/telemetry/slang-detections`
+- `/api/v1/public/top-slang`
+- `/api/v1/admin/slang`
 - `/api/v1/dashboard/word-frequency`
 - `/api/v1/dashboard/stats`
 
@@ -127,14 +130,15 @@ Core MVP behavior:
 - Heuristic confidence fallback when the classifier is unavailable.
 - OpenRouter text fallback and manual recheck using the user's API key from extension settings.
 - OpenRouter vision model for image and GIF analysis using the user's API key from extension settings.
-- Database cache for text and image analysis.
+- User-selectable OpenRouter model tiers: Free NVIDIA by default, Premium DeepSeek for text, and Premium Gemini for image understanding.
+- Opt-in anonymous slang frequency sharing for the shared public leaderboard.
 
 Advanced / learning-system behavior:
 
 - Optional fine-tuned local FLAN-T5 text translation model.
 - Optional local quality classifier.
-- Low-confidence review staging for text and image results.
-- Slang frequency tracking for dashboard metrics.
+- Monthly shared slang frequency tracking with yearly leaderboard aggregation.
+- Admin moderation for hiding or banning unsafe terms from public rankings.
 
 ## Core User Journeys
 
@@ -152,7 +156,7 @@ Advanced / learning-system behavior:
    - Confidence.
    - Review / recheck affordance.
 6. Result is saved to local history.
-7. If database telemetry is enabled, frequency counters are updated.
+7. If anonymous frequency sharing is enabled, the extension sends detected term/count pairs without page text, URLs, images, or API keys.
 
 ### 2. Direct Translation in Side Panel
 
@@ -174,7 +178,7 @@ Advanced / learning-system behavior:
 6. On cache miss, backend calls the configured vision model.
 7. Pet bubble explains the visual meme meaning and confidence.
 8. Result is saved to local history.
-9. If database review staging is enabled, low-confidence outputs are staged for review.
+9. Image analysis results are saved locally in browser history; shared telemetry never sends image payloads.
 
 ### 4. Capture or Paste an Image
 
@@ -196,8 +200,10 @@ Dashboard is an advanced learning and demo surface, not a primary MVP workflow.
 
 1. User opens History / Glossary.
 2. User clicks Refresh.
-3. Side panel loads total text analyses, total image analyses, unique slang terms, top term, and top slang frequency.
-4. Dashboard depends on database availability.
+3. Side panel loads the moderated current-month Top Slang Frequency.
+4. The current-month view resets automatically every month.
+5. The annual countdown aggregates archived monthly counts for the selected year.
+6. Dashboard depends on database availability.
 
 ### 7. First-Week Validation Test
 
@@ -245,33 +251,36 @@ Dashboard is an advanced learning and demo surface, not a primary MVP workflow.
 - The extension must not rely on content scripts on protected Chrome pages.
 - Users must be able to enable or disable text selection analysis, hover analysis, launcher, clipboard paste, inline annotation, and confirmation prompts.
 - The side panel must persist settings in `chrome.storage.local`.
+- The side panel must save text and image model tiers and apply them across active Chrome pages through storage change listeners.
+- The first-run experience must default anonymous shared frequency to off.
 - The floating launcher must support drag positioning, scaling, minimizing, and restoring.
 - The pet bubble must show loading, confirmation, success, non-brainrot, error, and retry states.
 - History must be searchable and filterable by type.
 - History must export as JSON and CSV.
 - Dictionary must import and export custom terms.
-- The first-run experience must explain what page context and media data may be sent to the backend.
+- The first-run experience must explain what page context and media data may be processed locally, sent to OpenRouter for AI features, or sent to the backend as anonymous term/count telemetry.
 
 ### Backend and Persistence
 
-- The backend must expose a health check with database, local model, quality classifier, OpenRouter, and API base status.
-- The backend must report whether the current request includes a user OpenRouter API key.
+- The backend must expose a health check with database, local model, quality classifier, and API base status.
+- The backend must expose public model-tier configuration so the extension can call OpenRouter directly without sending keys to the backend.
 - The backend must apply rate limits to analysis and dashboard routes.
 - The backend must support SQLite for local development and PostgreSQL-style schema concepts for production.
-- Text cache keys must normalize whitespace, case, and punctuation.
-- Image cache keys must use a stable hash of the image payload.
-- Low-confidence outputs may be staged for human review when database is configured.
+- Shared slang frequency must be stored by calendar month.
+- The public leaderboard must exclude terms marked `hidden` or `banned`.
+- Annual countdown rankings must aggregate monthly rows for the selected year.
 - Dashboard stats must degrade gracefully when database is unavailable.
-- The product must remain useful without dashboard or review staging enabled.
+- The product must remain useful without shared telemetry enabled.
 
 ## Non-Functional Requirements
 
 ### Privacy
 
 - The product should collect the minimum page context required for interpretation.
-- User-provided OpenRouter API keys must stay in local extension storage and be sent only as the `X-OpenRouter-API-Key` request header.
+- User-provided OpenRouter API keys must stay in extension storage and be sent only from the extension background service worker directly to OpenRouter. The production default remembers the key in `chrome.storage.local` for this browser profile; privacy mode stores it only in `chrome.storage.session` until Chrome closes.
 - The backend must not use a shared `OPENROUTER_API_KEY` from `.env`.
-- The extension should make remote calls only through the configured backend.
+- Shared telemetry must not include OpenRouter API keys, raw page text, page URLs, domains, image payloads, or surrounding context.
+- The extension should send anonymous telemetry and public/admin dashboard traffic through the configured backend, while AI model calls go directly to OpenRouter from the browser.
 - Image analysis should be explicitly controllable because image payloads can contain sensitive content.
 - History and custom dictionaries should remain local unless the user exports them.
 - First-run onboarding should make clear that selected text, surrounding context, and image payloads may be processed by a local backend and optionally by configured remote models.
@@ -332,7 +341,7 @@ Dashboard is an advanced learning and demo surface, not a primary MVP workflow.
 - Thin-wrapper risk: generic AI tools and major browsers may add similar translation or explanation features.
   - Mitigation: differentiate through page-native UX, visual meme analysis, custom dictionary, local history, and fast contextual workflows.
 - Fast-changing slang can make outputs stale.
-  - Mitigation: custom dictionary, import/export, training data utilities, manual recheck, and review staging.
+  - Mitigation: custom dictionary, import/export, model-tier choice, manual recheck, and admin moderation for shared rankings.
 - Meme images can be ambiguous or context dependent.
   - Mitigation: include page title/domain/source URL and confidence flags.
 - Remote model cost or latency can grow with image analysis.

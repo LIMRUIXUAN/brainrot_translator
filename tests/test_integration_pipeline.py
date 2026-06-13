@@ -39,7 +39,7 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         openrouter = AsyncMock()
 
         with patch("api.main.agent.analyze_highlighted_text", openrouter), \
-             patch("api.main.save_cached_text") as save_mock:
+             patch("api.main._try_db_text_lookup", return_value=None):
             response = await self.client.post(
                 "/api/v1/analyze-highlighted-text",
                 json={"selected_text": "rizz", "page_url": "https://example.test"},
@@ -50,7 +50,6 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["model_used"], "local_cache_slang_json")
         self.assertIn("charisma", payload["equivalent_text"].lower())
         openrouter.assert_not_awaited()
-        save_mock.assert_not_called()
 
     async def test_local_model_hit_returns_local_model_result(self) -> None:
         class FakeTokenizer:
@@ -69,7 +68,6 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main.get_model_components", return_value=(FakeTokenizer(), FakeModel())), \
              patch("api.main.get_quality_classifier_components", return_value=None), \
-             patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", openrouter):
             response = await self.client.post(
                 "/api/v1/analyze-highlighted-text",
@@ -82,8 +80,7 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["equivalent_text"], "He has strong charisma.")
         openrouter.assert_not_awaited()
 
-    async def test_database_cache_hit_returns_cached_result_on_second_request(self) -> None:
-        cache: dict[str, dict[str, object]] = {}
+    async def test_unknown_text_is_not_persisted_to_raw_text_cache(self) -> None:
         openrouter_result = HighlightedTextAnalysisResponse(
             is_brainrot=True,
             brainrot_text="new slang",
@@ -97,14 +94,9 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         openrouter = AsyncMock(return_value=openrouter_result)
 
-        def save_cache(lookup_key: str, data: dict[str, object]) -> bool:
-            cache[lookup_key] = data
-            return True
-
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main._try_local_model_text_analysis", return_value=None), \
-             patch("api.main.lookup_cached_text", side_effect=lambda key: cache.get(key)), \
-             patch("api.main.save_cached_text", side_effect=save_cache), \
+             patch("api.main.lookup_cached_text", return_value=None), \
              patch("api.main.agent.analyze_highlighted_text", openrouter):
             first = await self.client.post(
                 "/api/v1/analyze-highlighted-text",
@@ -117,9 +109,8 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.status_code, 401)
         self.assertEqual(first.json()["model_used"], "deepseek/deepseek-v4-flash")
-        self.assertEqual(second.json()["model_used"], "cached:deepseek/deepseek-v4-flash")
         openrouter.assert_awaited_once()
 
     async def test_low_confidence_local_result_triggers_openrouter_fallback(self) -> None:
@@ -149,7 +140,6 @@ class TranslationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("api.main._try_slang_json_lookup", return_value=None), \
              patch("api.main._try_local_model_text_analysis", return_value=local_result), \
-             patch("api.main.save_cached_text", return_value=True), \
              patch("api.main.agent.analyze_highlighted_text", openrouter):
             response = await self.client.post(
                 "/api/v1/analyze-highlighted-text",

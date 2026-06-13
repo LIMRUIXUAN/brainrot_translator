@@ -37,6 +37,30 @@
     }
   }
 
+  function renderApiKeyStatus(settings, enteredValue = "") {
+    if (!elements.apiKeyStatus) {
+      return;
+    }
+
+    elements.apiKeyStatus.className = "api-key-status";
+    if (String(enteredValue || "").trim()) {
+      elements.apiKeyStatus.textContent = "New key ready to save";
+      elements.apiKeyStatus.classList.add("is-pending");
+      return;
+    }
+
+    if (settings?.brainrotOpenRouterKeyPresent) {
+      elements.apiKeyStatus.textContent = settings.brainrotOpenRouterKeyStorage === "session"
+        ? "Key saved for this Chrome session"
+        : "Key saved on this device";
+      elements.apiKeyStatus.classList.add("is-saved");
+      return;
+    }
+
+    elements.apiKeyStatus.textContent = "No key saved";
+    elements.apiKeyStatus.classList.add("is-missing");
+  }
+
   function isValidApiBaseUrl(value) {
     try {
       const parsed = new URL(value);
@@ -54,38 +78,168 @@
     return Shared.getApiErrorMessage(response, payload, fallback);
   }
 
+  function sendRuntimeMessage(message) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        resolve(response || { ok: false });
+      });
+    });
+  }
+
+  async function getOpenRouterKeyStatus() {
+    const response = await sendRuntimeMessage({ action: "brainrotGetOpenRouterApiKeyStatus" });
+    if (!response?.ok) {
+      return { present: false, storage: "none", rememberOnDevice: true };
+    }
+    return {
+      present: Boolean(response.present),
+      storage: response.storage === "session" || response.storage === "local" ? response.storage : "none",
+      rememberOnDevice: response.rememberOnDevice !== false
+    };
+  }
+
+  async function setOpenRouterApiKey(apiKey, rememberOnDevice) {
+    const response = await sendRuntimeMessage({
+      action: "brainrotSetOpenRouterApiKey",
+      apiKey: String(apiKey || ""),
+      rememberOnDevice: rememberOnDevice !== false
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Unable to update OpenRouter key.");
+    }
+    return {
+      present: Boolean(response.present),
+      storage: response.storage === "session" || response.storage === "local" ? response.storage : "none"
+    };
+  }
+
+  async function setOpenRouterKeyPersistence(rememberOnDevice) {
+    const response = await sendRuntimeMessage({
+      action: "brainrotSetOpenRouterKeyPersistence",
+      rememberOnDevice: rememberOnDevice !== false
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Unable to update OpenRouter key storage.");
+    }
+    return {
+      present: Boolean(response.present),
+      storage: response.storage === "session" || response.storage === "local" ? response.storage : "none"
+    };
+  }
+
+  async function runOpenRouterTextAnalysis(payload, settings) {
+    const response = await sendRuntimeMessage({
+      action: "brainrotOpenRouterTextAnalysis",
+      payload,
+      settings
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "OpenRouter request failed.");
+    }
+    return response.result || {};
+  }
+
+  async function runOpenRouterReverseTranslate(payload, settings) {
+    const response = await sendRuntimeMessage({
+      action: "brainrotOpenRouterReverseTranslate",
+      payload,
+      settings
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "OpenRouter request failed.");
+    }
+    return response.result || {};
+  }
+
+  async function runTextAnalysisBackendFirst(payload, settings) {
+    const response = await fetch(`${settings.brainrotApiBaseUrl}/api/v1/analyze-highlighted-text`, {
+      method: "POST",
+      headers: buildApiHeaders(settings, true),
+      body: JSON.stringify(payload)
+    });
+    const body = await response.json().catch(() => ({}));
+    if (response.ok) {
+      return body;
+    }
+    const message = getApiErrorMessage(response, body, "Backend request failed.");
+    if (String(message).toLowerCase().includes("openrouter api key") && Shared.hasOpenRouterApiKey(settings)) {
+      return await runOpenRouterTextAnalysis(payload, settings);
+    }
+    throw new Error(message);
+  }
+
+  async function runReverseTranslate(payload, settings) {
+    return await runOpenRouterReverseTranslate(payload, settings);
+  }
+
   function getStoredSettings() {
     return new Promise((resolve) => {
       chrome.storage.local.get(Object.keys(DEFAULT_SETTINGS), (result) => {
-        resolve(normalizeSettings(result));
+        getOpenRouterKeyStatus()
+          .then((status) => {
+            resolve(normalizeSettings({
+              ...result,
+              brainrotOpenRouterKeyPresent: status.present,
+              brainrotOpenRouterKeyStorage: status.storage,
+              brainrotRememberOpenRouterKey: status.rememberOnDevice
+            }));
+          })
+          .catch(() => resolve(normalizeSettings({
+            ...result,
+            brainrotOpenRouterKeyPresent: false,
+            brainrotOpenRouterKeyStorage: "none"
+          })));
       });
     });
   }
 
   function setStoredSettings(nextSettings) {
     return new Promise((resolve) => {
-      chrome.storage.local.set(nextSettings, () => resolve());
+      chrome.storage.local.set(nextSettings, () => {
+        chrome.storage.local.remove("brainrotApiAuthToken", () => resolve());
+      });
     });
   }
 
   function readFormSettings() {
     return normalizeSettings({
       brainrotApiBaseUrl: elements.apiBaseUrl.value,
-      brainrotApiAuthToken: elements.apiAuthToken?.value || "",
+      brainrotOpenRouterKeyPresent: Boolean(
+        String(elements.apiAuthToken?.value || "").trim() ||
+        elements.apiAuthToken?.dataset.keyPresent === "true"
+      ),
+      brainrotOpenRouterKeyStorage: elements.apiAuthToken?.dataset.keyStorage || "none",
+      brainrotRememberOpenRouterKey: Boolean(elements.rememberOpenRouterKey?.checked),
       brainrotEnableTextSelection: elements.enableTextSelection.checked,
       brainrotConfirmTextSelection: elements.confirmTextSelection.checked,
       brainrotEnableHoverDetection: elements.enableHoverDetection.checked,
       brainrotEnableLauncher: elements.enableLauncher.checked,
       brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked,
       brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked,
-      brainrotTextModelSpeed: elements.textModelSpeed?.value || DEFAULT_SETTINGS.brainrotTextModelSpeed
+      brainrotTextModelTier: elements.textModelTier?.value || DEFAULT_SETTINGS.brainrotTextModelTier,
+      brainrotImageModelTier: elements.imageModelTier?.value || DEFAULT_SETTINGS.brainrotImageModelTier,
+      brainrotShareAnonymousFrequency: Boolean(elements.shareAnonymousFrequency?.checked)
     });
   }
 
   function renderSettings(settings) {
     elements.apiBaseUrl.value = settings.brainrotApiBaseUrl;
     if (elements.apiAuthToken) {
-      elements.apiAuthToken.value = settings.brainrotApiAuthToken;
+      elements.apiAuthToken.value = "";
+      elements.apiAuthToken.dataset.keyPresent = settings.brainrotOpenRouterKeyPresent ? "true" : "false";
+      elements.apiAuthToken.dataset.keyStorage = settings.brainrotOpenRouterKeyStorage || "none";
+      elements.apiAuthToken.placeholder = settings.brainrotOpenRouterKeyPresent
+        ? "Saved key hidden. Leave blank to keep it."
+        : "Required for AI features";
+      renderApiKeyStatus(settings);
+    }
+    if (elements.rememberOpenRouterKey) {
+      elements.rememberOpenRouterKey.checked = settings.brainrotRememberOpenRouterKey;
+    }
+    if (elements.apiKeyStorageHint) {
+      elements.apiKeyStorageHint.textContent = settings.brainrotRememberOpenRouterKey
+        ? "Saved only in this Chrome browser profile. Never sent to Brainrot Translator servers."
+        : "Forget key when Chrome closes. Never sent to Brainrot Translator servers.";
     }
     elements.enableTextSelection.checked = settings.brainrotEnableTextSelection;
     elements.confirmTextSelection.checked = settings.brainrotConfirmTextSelection;
@@ -93,8 +247,14 @@
     elements.enableLauncher.checked = settings.brainrotEnableLauncher;
     elements.enableClipboardPaste.checked = settings.brainrotEnableClipboardPaste;
     elements.enableInlineAnnotation.checked = settings.brainrotEnableInlineAnnotation;
-    if (elements.textModelSpeed) {
-      elements.textModelSpeed.value = settings.brainrotTextModelSpeed;
+    if (elements.textModelTier) {
+      elements.textModelTier.value = settings.brainrotTextModelTier;
+    }
+    if (elements.imageModelTier) {
+      elements.imageModelTier.value = settings.brainrotImageModelTier;
+    }
+    if (elements.shareAnonymousFrequency) {
+      elements.shareAnonymousFrequency.checked = settings.brainrotShareAnonymousFrequency;
     }
   }
 
@@ -156,15 +316,25 @@
   function showOnboarding() {
     onboardingStepIndex = 0;
     if (elements.onboardingDontShow) elements.onboardingDontShow.checked = false;
+    if (elements.onboardingShareFrequency) {
+      elements.onboardingShareFrequency.checked = Boolean(elements.shareAnonymousFrequency?.checked);
+    }
     if (elements.onboardingOverlay) elements.onboardingOverlay.hidden = false;
     renderOnboardingStep();
   }
 
   async function hideOnboarding({ markComplete = true } = {}) {
     if (markComplete) {
+      const shareFrequency = Boolean(elements.onboardingShareFrequency?.checked);
       await new Promise((resolve) => {
-        chrome.storage.local.set({ brainrotOnboardingComplete: true }, resolve);
+        chrome.storage.local.set({
+          brainrotOnboardingComplete: true,
+          brainrotShareAnonymousFrequency: shareFrequency
+        }, resolve);
       });
+      if (elements.shareAnonymousFrequency) {
+        elements.shareAnonymousFrequency.checked = shareFrequency;
+      }
     }
     if (elements.onboardingOverlay) elements.onboardingOverlay.hidden = true;
   }
@@ -187,12 +357,12 @@
     hintNode.textContent = hint;
   }
 
-  function renderHealthSuccess(baseUrl, payload) {
+  function renderHealthSuccess(baseUrl, payload, settings = readFormSettings()) {
     const localModelLoaded = Boolean(payload.local_text_model_loaded);
     const localModelAvailable = Boolean(payload.local_text_model_available);
     const qualityClassifierLoaded = Boolean(payload.local_quality_classifier_loaded);
     const qualityClassifierAvailable = Boolean(payload.local_quality_classifier_available);
-    const userKeyPresent = Boolean(payload.user_openrouter_key_present || payload.openrouter_configured);
+    const userKeyPresent = Shared.hasOpenRouterApiKey(settings);
     const localModelHint = localModelLoaded
       ? (qualityClassifierLoaded
           ? " Local FLAN-T5 plus confidence classifier is available for text."
@@ -365,7 +535,7 @@
     await refreshDashboardStats(baseUrl, settings);
 
     try {
-      const response = await fetch(`${baseUrl}/api/v1/dashboard/word-frequency?limit=10`, {
+      const response = await fetch(`${baseUrl}/api/v1/public/top-slang?period=month&limit=10`, {
         method: "GET",
         headers: buildApiHeaders(settings)
       });
@@ -532,34 +702,53 @@
 
     const direction = elements.translateDirection?.value === "to-brainrot" ? "to-brainrot" : "to-english";
     try {
-      if (direction === "to-brainrot" && !settings.brainrotApiAuthToken) {
+      if (direction === "to-brainrot" && !Shared.hasOpenRouterApiKey(settings)) {
         throw new Error("OpenRouter API key is required for reverse translation. Add your key in Settings.");
       }
 
-      const endpoint = direction === "to-brainrot"
-        ? "/api/v1/reverse-translate"
-        : "/api/v1/analyze-highlighted-text";
+      if (direction === "to-english") {
+        const offlinePayload = translateTextOffline(inputValue);
+        if (offlinePayload.is_brainrot || !Shared.hasOpenRouterApiKey(settings)) {
+          if (!offlinePayload.is_brainrot) {
+            setDirectTranslateResult(
+              offlinePayload.formal_explanation || "No brainrot detected. The text was left unchanged.",
+              "ok"
+            );
+            return;
+          }
+          const entry = {
+            timestamp: new Date().toISOString(),
+            type: "text",
+            original: inputValue,
+            translation: offlinePayload.equivalent_text || inputValue,
+            sentiment: offlinePayload.sentiment_label || "unclear",
+            confidence: offlinePayload.confidence_score || 0,
+            page_url: "sidepanel-direct-input",
+            page_title: "Side Panel Direct Input"
+          };
+          renderDirectTranslateCard(entry);
+          Shared.sendAnonymousSlangDetections(settings, offlinePayload).catch(() => undefined);
+          await saveHistoryEntry(entry);
+          await renderHistory();
+          return;
+        }
+      }
+
       const requestBody = direction === "to-brainrot"
         ? {
             text: inputValue,
             page_url: "sidepanel-direct-input",
-            text_model_speed: "fast"
+            text_model_tier: settings.brainrotTextModelTier
           }
         : {
             selected_text: inputValue,
             page_url: "sidepanel-direct-input",
-            text_model_speed: "fast"
+            text_model_tier: settings.brainrotTextModelTier
           };
 
-      const response = await fetch(`${settings.brainrotApiBaseUrl}${endpoint}`, {
-        method: "POST",
-        headers: buildApiHeaders(settings, true),
-        body: JSON.stringify(requestBody)
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(response, payload, "Backend request failed."));
-      }
+      const payload = direction === "to-brainrot"
+        ? await runReverseTranslate(requestBody, settings)
+        : await runTextAnalysisBackendFirst(requestBody, settings);
 
       if (direction === "to-english" && !payload.is_brainrot) {
         setDirectTranslateResult(
@@ -585,6 +774,9 @@
           : "Side Panel Direct Input"
       };
       renderDirectTranslateCard(entry);
+      if (direction === "to-english") {
+        Shared.sendAnonymousSlangDetections(settings, payload).catch(() => undefined);
+      }
       await saveHistoryEntry(entry);
       await renderHistory();
     } catch (error) {
@@ -621,6 +813,7 @@
             model_used: "client_offline_glossary"
           };
           renderDirectTranslateCard(entry);
+          Shared.sendAnonymousSlangDetections(settings, payload).catch(() => undefined);
           await saveHistoryEntry(entry);
           await renderHistory();
           return;
@@ -630,7 +823,7 @@
       }
 
       setDirectTranslateResult(
-        error instanceof Error ? error.message : "Unable to reach the backend.",
+        Shared.getFriendlyErrorMessage(error, "Unable to reach the backend."),
         "error"
       );
     } finally {
@@ -929,7 +1122,7 @@
       elements.databaseStatusValue,
       elements.databaseStatusHint,
       "Unknown",
-      "The popup could not confirm review staging.",
+      "The popup could not confirm shared leaderboard storage.",
       "warn"
     );
     setNotice(message, "error");
@@ -1118,13 +1311,13 @@
       if (!response.ok) {
         throw new Error(payload.detail || payload.error || "Backend health check failed.");
       }
-      renderHealthSuccess(baseUrl, payload);
+      renderHealthSuccess(baseUrl, payload, settings);
       await refreshFrequency(baseUrl, readFormSettings());
       setNotice("Backend health check succeeded.", "success");
     } catch (error) {
       renderHealthError(
         baseUrl,
-        error instanceof Error ? error.message : "Unable to reach the backend."
+        Shared.getFriendlyErrorMessage(error, "Unable to reach the backend.")
       );
     } finally {
       window.clearTimeout(timeoutId);
@@ -1132,9 +1325,24 @@
   }
 
   async function saveSettings() {
+    const currentSettings = await getStoredSettings();
+    const formSettings = readFormSettings();
+    const enteredApiKey = String(elements.apiAuthToken?.value || "").trim();
+    let keyStatus = {
+      present: Boolean(currentSettings.brainrotOpenRouterKeyPresent),
+      storage: currentSettings.brainrotOpenRouterKeyStorage || "none"
+    };
+    if (enteredApiKey) {
+      keyStatus = await setOpenRouterApiKey(enteredApiKey, formSettings.brainrotRememberOpenRouterKey);
+    } else if (currentSettings.brainrotRememberOpenRouterKey !== formSettings.brainrotRememberOpenRouterKey) {
+      keyStatus = await setOpenRouterKeyPersistence(formSettings.brainrotRememberOpenRouterKey);
+    }
+
     const nextSettings = normalizeSettings({
-      ...(await getStoredSettings()),
-      ...readFormSettings()
+      ...currentSettings,
+      ...formSettings,
+      brainrotOpenRouterKeyPresent: keyStatus.present,
+      brainrotOpenRouterKeyStorage: keyStatus.storage
     });
     if (!isValidApiBaseUrl(nextSettings.brainrotApiBaseUrl)) {
       setNotice("API Base URL must be a valid http or https address.", "error");
@@ -1142,15 +1350,31 @@
     }
 
     await setStoredSettings(nextSettings);
+    renderSettings(nextSettings);
     setNotice("Settings saved. Content scripts will pick them up immediately.", "success");
     await refreshHealth(nextSettings.brainrotApiBaseUrl);
   }
 
   async function resetDefaults() {
+    await setOpenRouterApiKey("", DEFAULT_SETTINGS.brainrotRememberOpenRouterKey);
     renderSettings(DEFAULT_SETTINGS);
     await setStoredSettings({ ...DEFAULT_SETTINGS });
     setNotice("Defaults restored.", "success");
     await refreshHealth(DEFAULT_SETTINGS.brainrotApiBaseUrl);
+  }
+
+  async function clearOpenRouterKey() {
+    await setOpenRouterApiKey("", readFormSettings().brainrotRememberOpenRouterKey);
+    const currentSettings = await getStoredSettings();
+    const nextSettings = normalizeSettings({
+      ...currentSettings,
+      brainrotOpenRouterKeyPresent: false,
+      brainrotOpenRouterKeyStorage: "none"
+    });
+    await setStoredSettings(nextSettings);
+    renderSettings(nextSettings);
+    setNotice("OpenRouter key cleared from this browser.", "success");
+    await refreshHealth(nextSettings.brainrotApiBaseUrl);
   }
 
   async function saveBehaviorSettingsImmediately() {
@@ -1163,7 +1387,10 @@
       brainrotEnableLauncher: elements.enableLauncher.checked,
       brainrotEnableClipboardPaste: elements.enableClipboardPaste.checked,
       brainrotEnableInlineAnnotation: elements.enableInlineAnnotation.checked,
-      brainrotTextModelSpeed: elements.textModelSpeed?.value || DEFAULT_SETTINGS.brainrotTextModelSpeed
+      brainrotTextModelTier: elements.textModelTier?.value || DEFAULT_SETTINGS.brainrotTextModelTier,
+      brainrotImageModelTier: elements.imageModelTier?.value || DEFAULT_SETTINGS.brainrotImageModelTier,
+      brainrotShareAnonymousFrequency: Boolean(elements.shareAnonymousFrequency?.checked),
+      brainrotRememberOpenRouterKey: Boolean(elements.rememberOpenRouterKey?.checked)
     });
     await setStoredSettings(nextSettings);
   }
@@ -1171,14 +1398,20 @@
   async function initialize() {
     elements.apiBaseUrl = document.getElementById("apiBaseUrl");
     elements.apiAuthToken = document.getElementById("apiAuthToken");
+    elements.apiKeyStatus = document.getElementById("apiKeyStatus");
+    elements.apiKeyStorageHint = document.getElementById("apiKeyStorageHint");
     elements.enableTextSelection = document.getElementById("enableTextSelection");
     elements.confirmTextSelection = document.getElementById("confirmTextSelection");
     elements.enableHoverDetection = document.getElementById("enableHoverDetection");
     elements.enableLauncher = document.getElementById("enableLauncher");
     elements.enableClipboardPaste = document.getElementById("enableClipboardPaste");
     elements.enableInlineAnnotation = document.getElementById("enableInlineAnnotation");
-    elements.textModelSpeed = document.getElementById("textModelSpeed");
+    elements.textModelTier = document.getElementById("textModelTier");
+    elements.imageModelTier = document.getElementById("imageModelTier");
+    elements.shareAnonymousFrequency = document.getElementById("shareAnonymousFrequency");
+    elements.rememberOpenRouterKey = document.getElementById("rememberOpenRouterKey");
     elements.saveSettingsButton = document.getElementById("saveSettingsButton");
+    elements.clearApiKeyButton = document.getElementById("clearApiKeyButton");
     elements.resetDefaultsButton = document.getElementById("resetDefaultsButton");
     elements.refreshHealthButton = document.getElementById("refreshHealthButton");
     elements.notice = document.getElementById("notice");
@@ -1205,6 +1438,7 @@
     elements.onboardingOverlay = document.getElementById("onboardingOverlay");
     elements.onboardingDots = document.getElementById("onboardingDots");
     elements.onboardingDontShow = document.getElementById("onboardingDontShow");
+    elements.onboardingShareFrequency = document.getElementById("onboardingShareFrequency");
     elements.onboardingSkipButton = document.getElementById("onboardingSkipButton");
     elements.onboardingNextButton = document.getElementById("onboardingNextButton");
     elements.onboardingStartButton = document.getElementById("onboardingStartButton");
@@ -1241,12 +1475,17 @@
 
     elements.saveSettingsButton.addEventListener("click", () => {
       saveSettings().catch((error) => {
-        setNotice(error instanceof Error ? error.message : "Failed to save settings.", "error");
+        setNotice(Shared.getFriendlyErrorMessage(error, "Failed to save settings."), "error");
       });
     });
     elements.resetDefaultsButton.addEventListener("click", () => {
       resetDefaults().catch((error) => {
         setNotice(error instanceof Error ? error.message : "Failed to reset defaults.", "error");
+      });
+    });
+    elements.clearApiKeyButton?.addEventListener("click", () => {
+      clearOpenRouterKey().catch((error) => {
+        setNotice(Shared.getFriendlyErrorMessage(error, "Failed to clear OpenRouter key."), "error");
       });
     });
     elements.refreshHealthButton.addEventListener("click", () => {
@@ -1278,10 +1517,23 @@
     elements.directTranslateButton?.addEventListener("click", () => {
       directTranslate().catch((error) => {
         setDirectTranslateResult(
-          error instanceof Error ? error.message : "Direct translation failed.",
+          Shared.getFriendlyErrorMessage(error, "Direct translation failed."),
           "error"
         );
       });
+    });
+
+    elements.apiAuthToken?.addEventListener("input", () => {
+      renderApiKeyStatus(readFormSettings(), elements.apiAuthToken.value);
+    });
+    elements.rememberOpenRouterKey?.addEventListener("change", () => {
+      const settings = readFormSettings();
+      renderApiKeyStatus(settings, elements.apiAuthToken?.value || "");
+      if (elements.apiKeyStorageHint) {
+        elements.apiKeyStorageHint.textContent = settings.brainrotRememberOpenRouterKey
+          ? "Saved only in this Chrome browser profile. Never sent to Brainrot Translator servers."
+          : "Forget key when Chrome closes. Never sent to Brainrot Translator servers.";
+      }
     });
 
     elements.clearHistoryButton?.addEventListener("click", () => {

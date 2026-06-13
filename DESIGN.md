@@ -415,7 +415,7 @@ flowchart LR
     B --> C["Local slang_terms.json"]
     B --> D["Local FLAN-T5 translator"]
     B --> E["Local quality classifier"]
-    B --> F["Database cache and review tables"]
+    B --> F["Monthly frequency and moderation tables"]
     B --> G["OpenRouter text models"]
     B --> H["OpenRouter vision models"]
 ```
@@ -425,20 +425,20 @@ flowchart LR
 ```mermaid
 flowchart TD
     A["Analyze highlighted text"] --> B["Normalize lookup key"]
-    B --> C["Record frequency terms"]
-    C --> D{"Exact slang_terms.json hit?"}
+    B --> D{"Exact slang_terms.json hit?"}
     D -->|Yes| E["Return local dataset result"]
     D -->|No| F{"Local model available?"}
     F -->|Yes| G["Run local model and quality scoring"]
     G --> H{"Low confidence?"}
-    H -->|No| I["Stage if needed, cache, return"]
+    H -->|No| I["Return local result"]
     H -->|Yes| J["Call OpenRouter text analysis"]
-    F -->|No| K{"Database cache hit?"}
-    K -->|Yes| L{"Low confidence cached result?"}
-    L -->|No| M["Return cached result"]
-    L -->|Yes| J
-    K -->|No| J
-    J --> N["Stage low confidence, save cache, return"]
+    F -->|No| J
+    J --> N["Return AI result"]
+    E --> O{"User opted into anonymous sharing?"}
+    I --> O
+    N --> O
+    O -->|Yes| P["Send term/count telemetry only"]
+    O -->|No| Q["Keep result local"]
 ```
 
 ### Image Routing
@@ -466,9 +466,10 @@ flowchart TD
 - `cached_image_analyses`
 - `verified_text_brainrot`
 - `verified_image_brainrot`
-- `brainrot_word_frequency`
+- `monthly_slang_frequency`
+- `slang_moderation`
 
-The cache tables serve repeated analysis speed. The verified tables stage low-confidence output for future correction. The frequency table powers dashboard metrics.
+Cache/review tables remain local-development and legacy support surfaces. Production shared ranking uses `monthly_slang_frequency` for opt-in anonymous term counts and `slang_moderation` to hide or ban unsafe terms from public charts.
 
 ## API Contract Summary
 
@@ -489,7 +490,7 @@ Returns runtime status:
 Input:
 
 - `selected_text`
-- `text_model_speed`
+- `text_model_tier`
 - `page_url`
 - `surrounding_text`
 - `page_title`
@@ -518,7 +519,7 @@ Input:
 
 - `text`
 - `page_url`
-- `text_model_speed`
+- `text_model_tier`
 
 Output:
 
@@ -532,6 +533,7 @@ Input:
 
 - `image_base64`
 - `media_type`
+- `image_model_tier`
 - `source_url`
 - `frame0_base64`
 - `frame0_media_type`
@@ -548,6 +550,33 @@ Output:
 - `flagged_for_review`
 - `model_used`
 - `used_frame_fallback`
+
+### `POST /api/v1/telemetry/slang-detections`
+
+Input:
+
+- `items`: detected slang terms and counts.
+- `extension_version`
+
+This route is called only when the user enables anonymous sharing. It must not receive raw page text, URLs, domains, image payloads, or OpenRouter API keys.
+
+### `GET /api/v1/public/top-slang`
+
+Query:
+
+- `period`: `month` or `year`
+- `year`
+- `limit`
+
+Returns moderated public rankings. Monthly view reads the current calendar month. Yearly view aggregates archived monthly counts.
+
+### `GET /api/v1/admin/slang`
+
+Requires Google ID-token bearer auth for configured admin emails. Returns terms, total counts, moderation status, unsafe flag, and update metadata.
+
+### `PATCH /api/v1/admin/slang/{normalized_term}`
+
+Requires Google admin auth. Updates `status` to `visible`, `hidden`, or `banned` plus an optional reason.
 
 ## Data Design
 
@@ -649,16 +678,17 @@ Message pattern:
 Actions:
 
 - Recheck.
-- Save to review staging when database is configured.
+- Send anonymous term/count telemetry only when the user opts in.
 
 ## Security and Privacy Design
 
 - OpenRouter API key is entered by the user in extension settings.
-- The extension sends the user key as `X-OpenRouter-API-Key`, not as backend `Authorization`.
+- The extension stores the user key in extension-controlled Chrome storage and sends it directly to OpenRouter from the background service worker. The default is `chrome.storage.local` for this browser profile; privacy mode uses `chrome.storage.session` until Chrome closes.
+- Backend and telemetry requests must not include the OpenRouter key.
 - The backend must not read a shared OpenRouter API key from `.env`.
 - `.env` should hold backend secrets and must not be committed.
 - Extension settings and history are stored locally.
-- Remote model calls go through the backend, not directly from the extension.
+- Remote model calls go directly from the extension background service worker to OpenRouter.
 - Media payload size is capped.
 - Hover analysis is user-toggleable and should be opt-in for production onboarding.
 - Clipboard image analysis is user-toggleable and should be opt-in for production onboarding.
@@ -679,11 +709,12 @@ Actions:
 
 - The extension defaults to `http://127.0.0.1:8000`.
 - AI recheck, reverse translation, remote text fallback, and image analysis require the user's OpenRouter API key from extension settings.
-- Text model speed currently maps to fast and slow OpenRouter model settings.
+- Text and image model tiers map to env-controlled OpenRouter model IDs. Defaults are Free NVIDIA for both text and image; Premium maps to DeepSeek for text and Gemini for image understanding.
+- Anonymous shared frequency is opt-in and sends only term/count pairs.
 - Local text model path is `models/brainrot-translator-v1`.
 - Local quality classifier path is `models/brainrot-quality-classifier-v1`.
 - Reference dataset path is `data/processed/slang_terms.json`.
-- The local extension also uses `chrome.storage.local` for offline glossary, custom dictionary, settings, history, onboarding state, launcher state, and active side-panel tab.
+- The local extension uses `chrome.storage.local` for non-secret settings, offline glossary, custom dictionary, history, onboarding state, launcher state, active side-panel tab, and the default remembered OpenRouter key. If the user disables "Remember OpenRouter key on this device," the OpenRouter key moves to `chrome.storage.session` and is forgotten when Chrome closes. The key is never stored in Chrome sync, the backend database, telemetry, or `.env`.
 
 ## QA Checklist
 
@@ -704,7 +735,7 @@ Actions:
 - Confirm text-only mode works with image features disabled.
 - Confirm first-run privacy copy appears before image hover is enabled in production builds.
 - Test backend offline behavior.
-- Test invalid auth token behavior.
+- Test missing or invalid OpenRouter key behavior.
 - Test rate-limit messaging.
 
 ### Advanced / Non-MVP Regression

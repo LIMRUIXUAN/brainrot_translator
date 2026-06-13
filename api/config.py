@@ -38,10 +38,17 @@ class Settings:
     openrouter_text_model: str
     openrouter_text_fast_model: str
     openrouter_text_slow_model: str
+    openrouter_text_free_model: str
+    openrouter_text_premium_model: str
     openrouter_vision_model: str
+    openrouter_image_free_model: str
+    openrouter_image_premium_model: str
     openrouter_vision_fallback_models: tuple[str, ...]
     openrouter_http_referer: str
     openrouter_app_title: str
+    google_admin_client_id: str
+    admin_google_emails: tuple[str, ...]
+    unsafe_slang_keywords: tuple[str, ...]
     low_confidence_threshold: float
     max_image_bytes: int
     cache_ttl_hours: int
@@ -70,8 +77,21 @@ def get_settings() -> Settings:
         openrouter_text_slow_model=(
             os.getenv("OPENROUTER_TEXT_SLOW_MODEL") or "nvidia/nemotron-3-super-120b-a12b:free"
         ).strip(),
+        openrouter_text_free_model=(
+            os.getenv("OPENROUTER_TEXT_FREE_MODEL") or "nvidia/nemotron-3-super-120b-a12b:free"
+        ).strip(),
+        openrouter_text_premium_model=(
+            os.getenv("OPENROUTER_TEXT_PREMIUM_MODEL") or "deepseek/deepseek-v4-flash"
+        ).strip(),
         openrouter_vision_model=(
             os.getenv("OPENROUTER_VISION_MODEL") or "google/gemini-3-flash-preview"
+        ).strip(),
+        openrouter_image_free_model=(
+            os.getenv("OPENROUTER_IMAGE_FREE_MODEL")
+            or "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+        ).strip(),
+        openrouter_image_premium_model=(
+            os.getenv("OPENROUTER_IMAGE_PREMIUM_MODEL") or "google/gemini-3.1-flash-lite"
         ).strip(),
         openrouter_vision_fallback_models=_env_list(
             "OPENROUTER_VISION_FALLBACK_MODELS",
@@ -84,6 +104,23 @@ def get_settings() -> Settings:
         openrouter_app_title=(
             os.getenv("OPENROUTER_APP_TITLE") or "Brainrot Translator"
         ).strip(),
+        google_admin_client_id=(os.getenv("GOOGLE_ADMIN_CLIENT_ID") or "").strip(),
+        admin_google_emails=_env_list("ADMIN_GOOGLE_EMAILS", ()),
+        unsafe_slang_keywords=_env_list(
+            "BRAINROT_UNSAFE_SLANG_KEYWORDS",
+            (
+                "porn",
+                "porno",
+                "pornographic",
+                "nsfw",
+                "hentai",
+                "sex",
+                "nude",
+                "nudes",
+                "rape",
+                "slur",
+            ),
+        ),
         low_confidence_threshold=float(
             (os.getenv("BRAINROT_LOW_CONFIDENCE_THRESHOLD") or "0.7").strip()
         ),

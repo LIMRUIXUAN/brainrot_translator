@@ -2,14 +2,18 @@
   const DEFAULT_API_BASE = "http://127.0.0.1:8000";
   const BASE_DEFAULT_SETTINGS = Object.freeze({
     brainrotApiBaseUrl: DEFAULT_API_BASE,
-    brainrotApiAuthToken: "",
+    brainrotOpenRouterKeyPresent: false,
+    brainrotOpenRouterKeyStorage: "none",
+    brainrotRememberOpenRouterKey: true,
     brainrotEnableTextSelection: true,
     brainrotConfirmTextSelection: true,
     brainrotEnableHoverDetection: true,
     brainrotEnableLauncher: true,
     brainrotEnableClipboardPaste: true,
     brainrotEnableInlineAnnotation: false,
-    brainrotTextModelSpeed: "fast",
+    brainrotTextModelTier: "free",
+    brainrotImageModelTier: "free",
+    brainrotShareAnonymousFrequency: false,
     brainrotLauncherPosition: null
   });
 
@@ -30,10 +34,18 @@
 
     const normalized = {
       brainrotApiBaseUrl: apiBase.replace(/\/+$/, ""),
-      brainrotApiAuthToken:
-        typeof raw.brainrotApiAuthToken === "string"
-          ? raw.brainrotApiAuthToken.trim()
-          : defaults.brainrotApiAuthToken,
+      brainrotOpenRouterKeyPresent:
+        typeof raw.brainrotOpenRouterKeyPresent === "boolean"
+          ? raw.brainrotOpenRouterKeyPresent
+          : Boolean(defaults.brainrotOpenRouterKeyPresent),
+      brainrotOpenRouterKeyStorage:
+        raw.brainrotOpenRouterKeyStorage === "local" || raw.brainrotOpenRouterKeyStorage === "session"
+          ? raw.brainrotOpenRouterKeyStorage
+          : defaults.brainrotOpenRouterKeyStorage,
+      brainrotRememberOpenRouterKey:
+        typeof raw.brainrotRememberOpenRouterKey === "boolean"
+          ? raw.brainrotRememberOpenRouterKey
+          : defaults.brainrotRememberOpenRouterKey,
       brainrotEnableTextSelection:
         typeof raw.brainrotEnableTextSelection === "boolean"
           ? raw.brainrotEnableTextSelection
@@ -58,10 +70,18 @@
         typeof raw.brainrotEnableInlineAnnotation === "boolean"
           ? raw.brainrotEnableInlineAnnotation
           : defaults.brainrotEnableInlineAnnotation,
-      brainrotTextModelSpeed:
-        raw.brainrotTextModelSpeed === "slow"
-          ? "slow"
-          : defaults.brainrotTextModelSpeed,
+      brainrotTextModelTier:
+        raw.brainrotTextModelTier === "premium"
+          ? "premium"
+          : defaults.brainrotTextModelTier,
+      brainrotImageModelTier:
+        raw.brainrotImageModelTier === "premium"
+          ? "premium"
+          : defaults.brainrotImageModelTier,
+      brainrotShareAnonymousFrequency:
+        typeof raw.brainrotShareAnonymousFrequency === "boolean"
+          ? raw.brainrotShareAnonymousFrequency
+          : defaults.brainrotShareAnonymousFrequency,
       brainrotLauncherPosition:
         raw.brainrotLauncherPosition &&
         Number.isFinite(raw.brainrotLauncherPosition.left) &&
@@ -198,13 +218,11 @@
   function buildApiHeaders(settings, includeJson = false) {
     const headers = {};
     if (includeJson) headers["Content-Type"] = "application/json";
-    const token = String(settings?.brainrotApiAuthToken || "").trim();
-    if (token) headers["X-OpenRouter-API-Key"] = token;
     return headers;
   }
 
   function hasOpenRouterApiKey(settings) {
-    return Boolean(String(settings?.brainrotApiAuthToken || "").trim());
+    return Boolean(settings?.brainrotOpenRouterKeyPresent);
   }
 
   function getApiErrorMessage(response, payload, fallback = "Backend request failed.") {
@@ -217,9 +235,70 @@
     return payload?.detail || payload?.error || fallback;
   }
 
+  function getFriendlyErrorMessage(error, fallback = "Request failed.") {
+    const name = String(error?.name || "");
+    const message = typeof error === "string"
+      ? error
+      : String(error?.message || "");
+    const lower = `${name} ${message}`.toLowerCase();
+
+    if (
+      name === "AbortError" ||
+      lower.includes("user aborted") ||
+      lower.includes("operation was aborted") ||
+      lower.includes("aborterror")
+    ) {
+      return "The request timed out or was cancelled. Try again, check your connection, or switch to a faster model.";
+    }
+
+    if (lower.includes("extension context invalidated")) {
+      return "The extension was reloaded while the request was running. Refresh the page and try again.";
+    }
+
+    return message || fallback;
+  }
+
   function shouldRetryApiError(error) {
     const message = String(error?.message || "");
     return !message.startsWith("Please wait") && !message.startsWith("OpenRouter API key");
+  }
+
+  function getExtensionVersion() {
+    try {
+      return chrome?.runtime?.getManifest?.().version || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function extractTelemetryTerms(result) {
+    if (!result || !result.is_brainrot) return [];
+    const rawTerms = String(result.brainrot_text || result.brainrot_meaning || "").trim();
+    if (!rawTerms) return [];
+    const terms = rawTerms
+      .split(/[,|/]+/)
+      .map((term) => term.replace(/\s+/g, " ").trim())
+      .filter((term) => term.length >= 2 && term.length <= 256);
+    return Array.from(new Set(terms.map((term) => term.toLowerCase()))).map((normalized) => {
+      return terms.find((term) => term.toLowerCase() === normalized);
+    }).filter(Boolean);
+  }
+
+  async function sendAnonymousSlangDetections(settings, result) {
+    const normalizedSettings = normalizeSettings(settings);
+    if (!normalizedSettings.brainrotShareAnonymousFrequency) return false;
+    const terms = extractTelemetryTerms(result);
+    if (terms.length === 0) return false;
+
+    const response = await fetch(`${normalizedSettings.brainrotApiBaseUrl}/api/v1/telemetry/slang-detections`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: terms.map((term) => ({ term, count: 1 })),
+        extension_version: getExtensionVersion()
+      })
+    });
+    return response.ok;
   }
 
   const api = {
@@ -231,7 +310,10 @@
     buildApiHeaders,
     hasOpenRouterApiKey,
     getApiErrorMessage,
-    shouldRetryApiError
+    getFriendlyErrorMessage,
+    shouldRetryApiError,
+    extractTelemetryTerms,
+    sendAnonymousSlangDetections
   };
 
   root.BrainrotShared = api;

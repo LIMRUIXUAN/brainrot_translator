@@ -383,20 +383,37 @@ class BrainrotAgent:
             model_used="heuristic_reverse_fallback",
         )
 
-    def _resolve_text_model(self, text_model_speed: str | None = None) -> tuple[str, float]:
-        speed = (text_model_speed or "fast").strip().casefold()
+    def _resolve_text_model(
+        self,
+        text_model_speed: str | None = None,
+        text_model_tier: str | None = None,
+    ) -> tuple[str, float]:
+        tier = (text_model_tier or "").strip().casefold()
+        if tier == "premium":
+            return self.settings.openrouter_text_premium_model, 30.0
+        if tier == "free":
+            return self.settings.openrouter_text_free_model, 90.0
+
+        speed = (text_model_speed or "").strip().casefold()
         if speed == "slow":
-            return self.settings.openrouter_text_slow_model, 90.0
-        return self.settings.openrouter_text_fast_model, 12.0
+            return self.settings.openrouter_text_free_model, 90.0
+        return self.settings.openrouter_text_premium_model, 30.0
+
+    def _resolve_image_model(self, image_model_tier: str | None = None) -> tuple[str, float]:
+        tier = (image_model_tier or "free").strip().casefold()
+        if tier == "premium":
+            return self.settings.openrouter_image_premium_model, 45.0
+        return self.settings.openrouter_image_free_model, 90.0
 
     async def reverse_translate(
         self,
         text: str,
         text_model_speed: str | None = None,
+        text_model_tier: str | None = None,
         openrouter_api_key: str | None = None,
     ) -> ReverseTranslateResponse:
         cleaned = text.strip()
-        model, timeout_seconds = self._resolve_text_model(text_model_speed)
+        model, timeout_seconds = self._resolve_text_model(text_model_speed, text_model_tier)
         payload = {
             "model": model,
             "messages": [
@@ -444,9 +461,10 @@ class BrainrotAgent:
         page_domain: Optional[str] = None,
         nearest_heading: Optional[str] = None,
         text_model_speed: str | None = None,
+        text_model_tier: str | None = None,
         openrouter_api_key: str | None = None,
     ) -> HighlightedTextAnalysisResponse:
-        model, timeout_seconds = self._resolve_text_model(text_model_speed)
+        model, timeout_seconds = self._resolve_text_model(text_model_speed, text_model_tier)
         payload = {
             "model": model,
             "messages": [
@@ -567,17 +585,20 @@ class BrainrotAgent:
         frame0_media_type: Optional[str] = None,
         page_title: Optional[str] = None,
         page_domain: Optional[str] = None,
+        image_model_tier: str | None = None,
         openrouter_api_key: str | None = None,
     ) -> ImageAnalysisResponse:
+        primary_model, timeout_seconds = self._resolve_image_model(image_model_tier)
         try:
             return await self._call_image_model(
-                model=self.settings.openrouter_vision_model,
+                model=primary_model,
                 image_base64=image_base64,
                 media_type=media_type,
                 source_url=source_url,
                 using_frame=False,
                 page_title=page_title,
                 page_domain=page_domain,
+                timeout_seconds=timeout_seconds,
                 openrouter_api_key=openrouter_api_key,
             )
         except OpenRouterAuthError:
@@ -586,7 +607,7 @@ class BrainrotAgent:
             return ImageAnalysisResponse.safe_fallback(
                 confidence_score=0.0,
                 flagged_for_review=True,
-                model_used=self.settings.openrouter_vision_model,
+                model_used=primary_model,
                 used_frame_fallback=False,
             )
         except Exception:
@@ -625,6 +646,6 @@ class BrainrotAgent:
         return ImageAnalysisResponse.safe_fallback(
             confidence_score=0.0,
             flagged_for_review=True,
-            model_used=self.settings.openrouter_vision_model,
+            model_used=primary_model,
             used_frame_fallback=False,
         )
